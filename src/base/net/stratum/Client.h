@@ -64,6 +64,8 @@ public:
 
     constexpr static uint64_t kConnectTimeout   = 20 * 1000;
     constexpr static uint64_t kResponseTimeout  = 20 * 1000;
+    /* MoneroOcean pools rate-limit login and pre-share getjob requests per source IP. */
+    constexpr static uint64_t kUpstreamRequestInterval = 250;
     constexpr static size_t kMaxSendBufferSize  = 1024 * 16;
 
     Client(int id, const char *agent, IClientListener *listener);
@@ -133,6 +135,7 @@ private:
     void parseExtensions(const rapidjson::Value &result);
     void parseResponse(int64_t id, const rapidjson::Value &result, const rapidjson::Value &error);
     void ping();
+    void sendGetjob();
     void read(ssize_t nread, const uv_buf_t *buf);
     void reconnect();
     void setState(SocketState state);
@@ -160,11 +163,17 @@ private:
     String m_rpcId;
     Tls *m_tls                  = nullptr;
     uint64_t m_expire           = 0;
+    bool m_loginPending         = false;
+    bool m_loginInFlight        = false;
+    bool m_getjobDirty          = false;
+    bool m_getjobInFlight       = false;
     uint64_t m_jobs             = 0;
     uint64_t m_keepAlive        = 0;
     uintptr_t m_key             = 0;
     uv_tcp_t *m_socket          = nullptr;
 
+    static uint64_t m_lastLogin;
+    static uint64_t m_lastGetjob;
     static Storage<Client> m_storage;
 };
 

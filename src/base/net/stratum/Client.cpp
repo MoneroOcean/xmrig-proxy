@@ -61,6 +61,8 @@
 namespace xmrig {
 
 Storage<Client> Client::m_storage;
+uint64_t Client::m_lastLogin  = 0;
+uint64_t Client::m_lastGetjob = 0;
 
 } /* namespace xmrig */
 
@@ -150,6 +152,10 @@ int64_t xmrig::Client::send(const rapidjson::Value &obj, Callback callback)
 
 int64_t xmrig::Client::send(const rapidjson::Value &obj)
 {
+    if (m_state != ConnectedState || m_socket == nullptr || uv_is_writable(stream()) != 1) {
+        return -1;
+    }
+
     using namespace rapidjson;
 
     StringBuffer buffer(nullptr, 512);
@@ -178,6 +184,10 @@ int64_t xmrig::Client::send(const rapidjson::Value &obj)
 
 int64_t xmrig::Client::submit(const JobResult &result)
 {
+    if (m_rpcId.isNull() || m_state != ConnectedState || m_socket == nullptr || uv_is_writable(stream()) != 1) {
+        return -1;
+    }
+
 #   ifndef XMRIG_PROXY_PROJECT
     if (result.clientId != m_rpcId || m_rpcId.isNull() || m_state != ConnectedState) {
         return -1;
@@ -301,6 +311,14 @@ void xmrig::Client::deleteLater()
 void xmrig::Client::tick(uint64_t now)
 {
     if (m_state == ConnectedState) {
+        if (m_loginPending && !m_loginInFlight) {
+            login();
+        }
+
+        if (m_getjobDirty && !m_getjobInFlight) {
+            sendGetjob();
+        }
+
         if (m_expire && now > m_expire) {
             LOG_DEBUG_ERR("[%s] timeout", url());
             close();
@@ -390,6 +408,12 @@ bool xmrig::Client::close()
     if (m_state == UnconnectedState || m_socket == nullptr) {
         return false;
     }
+
+    m_rpcId = nullptr;
+    m_loginPending   = false;
+    m_loginInFlight  = false;
+    m_getjobDirty    = false;
+    m_getjobInFlight = false;
 
     setState(ClosingState);
 
@@ -503,7 +527,7 @@ bool xmrig::Client::send(BIO *bio)
     LOG_DEBUG("[%s] TLS send     (%d bytes)", url(), static_cast<int>(buf.len));
 
     bool result = false;
-    if (state() == ConnectedState && uv_is_writable(stream())) {
+    if (state() == ConnectedState && m_socket != nullptr && uv_is_writable(stream())) {
         result = write(buf);
     }
     else {
@@ -591,7 +615,7 @@ int64_t xmrig::Client::send(size_t size)
     else
 #   endif
     {
-        if (state() != ConnectedState || !uv_is_writable(stream())) {
+        if (state() != ConnectedState || m_socket == nullptr || !uv_is_writable(stream())) {
             LOG_DEBUG_ERR("[%s] send failed, invalid state: %d", url(), m_state);
             return -1;
         }
@@ -685,6 +709,28 @@ bool xmrig::Client::parseGetjob(const rapidjson::Value &result, int *code)
 
 void xmrig::Client::login()
 {
+    if (m_state != ConnectedState || m_socket == nullptr || uv_is_writable(stream()) != 1) {
+        m_loginPending = true;
+        m_expire = 0;
+
+        return;
+    }
+
+    if (m_loginInFlight) {
+        return;
+    }
+
+    const uint64_t now = Chrono::steadyMSecs();
+    if (m_lastLogin != 0 && now - m_lastLogin < kUpstreamRequestInterval) {
+        m_loginPending = true;
+        m_expire = 0;
+
+        return;
+    }
+
+    m_lastLogin = now;
+    m_loginPending = false;
+
     using namespace rapidjson;
     m_results.clear();
 
@@ -708,18 +754,39 @@ void xmrig::Client::login()
 
     JsonRequest::create(doc, 1, "login", params);
 
-    send(doc);
+    if (send(doc) < 0) {
+        m_loginPending = true;
+
+        return;
+    }
+
+    m_loginInFlight = true;
 }
 
 
 /* MoneroOcean change: begin Refresh the upstream job when miner capabilities change instead of reconnecting the pool client. */
 void xmrig::Client::getjob()
 {
+    m_getjobDirty = true;
+    sendGetjob();
+}
+
+
+void xmrig::Client::sendGetjob()
+{
     using namespace rapidjson;
 
-    if (!m_rpcId) {
+    if (!m_getjobDirty || m_getjobInFlight || !m_rpcId || m_state != ConnectedState || m_socket == nullptr || uv_is_writable(stream()) != 1) {
         return;
     }
+
+    const uint64_t now = Chrono::steadyMSecs();
+    if (m_lastGetjob != 0 && now - m_lastGetjob < kUpstreamRequestInterval) {
+        return;
+    }
+
+    m_lastGetjob = now;
+    m_getjobDirty = false;
 
     Document doc(kObjectType);
     auto &allocator = doc.GetAllocator();
@@ -731,7 +798,13 @@ void xmrig::Client::getjob()
 
     JsonRequest::create(doc, 1, "getjob", params);
 
-    send(doc);
+    if (send(doc) < 0) {
+        m_getjobDirty = true;
+
+        return;
+    }
+
+    m_getjobInFlight = true;
 }
 /* MoneroOcean change: end */
 
@@ -906,12 +979,25 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
 
     if (error.IsObject()) {
         const char *message = error["message"].GetString();
+        const bool getjob = id == 1 && m_getjobInFlight;
+
+        if (id == 1) {
+            if (getjob) {
+                m_getjobInFlight = false;
+                m_getjobDirty = false;
+            }
+            else {
+                m_loginInFlight = false;
+            }
+        }
 
         if (!handleSubmitResponse(id, message) && !isQuiet()) {
             LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), message, Json::getInt(error, "code"));
         }
 
-        if (m_id == 1 || isCriticalError(message)) {
+        /* A getjob rejection is not a failed login.  In particular, do not force
+         * the backup strategy to reconnect for a pool-side getjob rate limit. */
+        if ((!getjob && m_id == 1) || isCriticalError(message)) {
             close();
         }
 
@@ -925,11 +1011,24 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
     if (id == 1) {
         int code = -1;
         /* MoneroOcean change: begin A getjob response also uses id 1, and should update the current job without replaying login success. */
-        if (parseGetjob(result, &code)) {
-            m_listener->onJobReceived(this, m_job, result);
+        if (m_getjobInFlight) {
+            m_getjobInFlight = false;
+            if (parseGetjob(result, &code)) {
+                m_listener->onJobReceived(this, m_job, result);
+            }
+            else if (!isQuiet()) {
+                LOG_ERR("%s " RED("getjob error code: ") RED_BOLD("%d"), tag(), code);
+                close();
+            }
+
+            if (m_getjobDirty) {
+                sendGetjob();
+            }
+
             return;
         }
         /* MoneroOcean change: end */
+        m_loginInFlight = false;
         if (!parseLogin(result, &code)) {
             if (!isQuiet()) {
                 LOG_ERR("%s " RED("login error code: ") RED_BOLD("%d"), tag(), code);
@@ -940,6 +1039,10 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         }
 
         m_failures = 0;
+        /* The login carries the current group capabilities, so a queued getjob
+         * from the previous socket has already been satisfied. */
+        m_getjobDirty = false;
+        m_getjobInFlight = false;
         m_listener->onLoginSuccess(this);
 
         if (m_job.isValid()) {
