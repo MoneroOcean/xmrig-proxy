@@ -182,8 +182,9 @@ class JsonPeer extends EventEmitter {
 }
 
 class FakePool {
-    constructor(timeoutMs) {
+    constructor(timeoutMs, options = {}) {
         this.timeoutMs = timeoutMs;
+        this.options = options;
         this.server = net.createServer(socket => this.onConnection(socket));
         this.connections = [];
         this.logins = [];
@@ -214,8 +215,8 @@ class FakePool {
 
     onMessage(connection, message) {
         if (message.method === "login") {
-            this.logins.push({ connection, message });
-            connection.peer.send({
+            this.logins.push({ at: Date.now(), connection, message });
+            const respond = () => connection.peer.send({
                 id: message.id,
                 jsonrpc: "2.0",
                 error: null,
@@ -225,20 +226,52 @@ class FakePool {
                     extensions: ["algo", "keepalive"]
                 }
             });
+
+            if (this.options.loginDelayMs) {
+                setTimeout(respond, this.options.loginDelayMs);
+            }
+            else {
+                respond();
+            }
+
             return;
         }
 
         if (message.method === "getjob") {
-            this.getjobs.push({ connection, message });
-            connection.peer.send({
-                id: message.id,
-                jsonrpc: "2.0",
-                error: null,
-                result: Object.assign({
-                    id: connection.rpcId,
-                    extensions: ["algo", "keepalive"]
-                }, this.nextJob())
-            });
+            this.getjobs.push({ at: Date.now(), connection, message });
+            const respond = () => {
+                if (this.options.getjobError) {
+                    connection.peer.send({
+                        id: message.id,
+                        jsonrpc: "2.0",
+                        error: this.options.getjobError,
+                        result: null
+                    });
+                }
+                else {
+                    connection.peer.send({
+                        id: message.id,
+                        jsonrpc: "2.0",
+                        error: null,
+                        result: Object.assign({
+                            id: connection.rpcId,
+                            extensions: ["algo", "keepalive"]
+                        }, this.nextJob())
+                    });
+                }
+
+                if (this.options.closeOnGetjob) {
+                    setTimeout(() => connection.peer.close(), 10);
+                }
+            };
+
+            if (this.options.getjobDelayMs) {
+                setTimeout(respond, this.options.getjobDelayMs);
+            }
+            else {
+                respond();
+            }
+
             return;
         }
 
@@ -483,7 +516,7 @@ async function stopProxy(child) {
 
 async function withProxy(testFn, options = {}) {
     const config = getTestConfig();
-    const pool = new FakePool(config.timeoutMs);
+    const pool = new FakePool(config.timeoutMs, options.poolOptions || {});
     const miners = [];
     const proxyCwd = fs.mkdtempSync(path.join(os.tmpdir(), "xmrig-proxy-test-"));
     let proxy = null;

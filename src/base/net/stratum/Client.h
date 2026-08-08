@@ -65,7 +65,8 @@ public:
     constexpr static uint64_t kConnectTimeout   = 20 * 1000;
     constexpr static uint64_t kResponseTimeout  = 20 * 1000;
     /* MoneroOcean pools rate-limit login and pre-share getjob requests per source IP. */
-    constexpr static uint64_t kUpstreamRequestInterval = 250;
+    constexpr static uint64_t kUpstreamRequestWindow = 1000;
+    constexpr static uint8_t kUpstreamRequestsPerWindow = 4;
     constexpr static size_t kMaxSendBufferSize  = 1024 * 16;
 
     Client(int id, const char *agent, IClientListener *listener);
@@ -172,8 +173,10 @@ private:
     uintptr_t m_key             = 0;
     uv_tcp_t *m_socket          = nullptr;
 
-    static uint64_t m_lastLogin;
-    static uint64_t m_lastGetjob;
+    static uint64_t m_loginWindow;
+    static uint64_t m_getjobWindow;
+    static uint8_t m_loginWindowCount;
+    static uint8_t m_getjobWindowCount;
     static Storage<Client> m_storage;
 };
 

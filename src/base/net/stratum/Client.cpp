@@ -61,8 +61,10 @@
 namespace xmrig {
 
 Storage<Client> Client::m_storage;
-uint64_t Client::m_lastLogin  = 0;
-uint64_t Client::m_lastGetjob = 0;
+uint64_t Client::m_loginWindow      = 0;
+uint64_t Client::m_getjobWindow     = 0;
+uint8_t Client::m_loginWindowCount  = 0;
+uint8_t Client::m_getjobWindowCount = 0;
 
 } /* namespace xmrig */
 
@@ -721,14 +723,19 @@ void xmrig::Client::login()
     }
 
     const uint64_t now = Chrono::steadyMSecs();
-    if (m_lastLogin != 0 && now - m_lastLogin < kUpstreamRequestInterval) {
+    if (m_loginWindow == 0 || now - m_loginWindow >= kUpstreamRequestWindow) {
+        m_loginWindow = now;
+        m_loginWindowCount = 0;
+    }
+
+    if (m_loginWindowCount >= kUpstreamRequestsPerWindow) {
         m_loginPending = true;
         m_expire = 0;
 
         return;
     }
 
-    m_lastLogin = now;
+    ++m_loginWindowCount;
     m_loginPending = false;
 
     using namespace rapidjson;
@@ -781,11 +788,16 @@ void xmrig::Client::sendGetjob()
     }
 
     const uint64_t now = Chrono::steadyMSecs();
-    if (m_lastGetjob != 0 && now - m_lastGetjob < kUpstreamRequestInterval) {
+    if (m_getjobWindow == 0 || now - m_getjobWindow >= kUpstreamRequestWindow) {
+        m_getjobWindow = now;
+        m_getjobWindowCount = 0;
+    }
+
+    if (m_getjobWindowCount >= kUpstreamRequestsPerWindow) {
         return;
     }
 
-    m_lastGetjob = now;
+    ++m_getjobWindowCount;
     m_getjobDirty = false;
 
     Document doc(kObjectType);
