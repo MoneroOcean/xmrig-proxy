@@ -6,8 +6,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #include "base/net/stratum/NativeTarget.h"
+#include "base/net/stratum/GetjobCooldown.h"
 
 
 namespace {
@@ -112,6 +114,51 @@ void testComparisonAndEndian()
 }
 
 
+void testGetjobCooldown()
+{
+    const std::string base("[\"rx/0\",\"cn-heavy/xhv\"]");
+    const std::string changed("[\"rx/0\"]");
+    xmrig::GetjobCooldown cooldown;
+
+    CHECK(xmrig::GetjobCooldown::kDuration == 600000);
+    CHECK(cooldown.allows(1000, base));
+    cooldown.reject(1000, base);
+    CHECK(!cooldown.allows(1000 + 599999, base));
+    CHECK(cooldown.allows(1000 + 600000, base));
+    CHECK(cooldown.allows(1000, changed));
+    cooldown.clear();
+    CHECK(cooldown.allows(1000, base));
+}
+
+
+void testCapabilityErrorLog()
+{
+    xmrig::CapabilityErrorLog log;
+    const std::string endpointMessage("pool.example:3333\nalgo array must include at least one supported pool algo: no matching work");
+    const std::string otherEndpoint("other.example:3333\nalgo array must include at least one supported pool algo: no matching work");
+    const std::string otherMessage("pool.example:3333\nalgo array must include at least one supported pool algo: changed");
+
+    CHECK(xmrig::CapabilityErrorLog::kDuration == 600000);
+    CHECK(xmrig::CapabilityErrorLog::kMaxEntries == 64);
+    CHECK(log.allows(1000, endpointMessage));
+    CHECK(!log.allows(1001, endpointMessage));
+    CHECK(log.allows(1001, otherEndpoint));
+    CHECK(log.allows(1001, otherMessage));
+    CHECK(log.allows(1000 + 600000, endpointMessage));
+
+    xmrig::CapabilityErrorLog capacity;
+    const std::string first("first");
+    CHECK(capacity.allows(1, first));
+    for (std::size_t i = 1; i < xmrig::CapabilityErrorLog::kMaxEntries; ++i) {
+        CHECK(capacity.allows(2, "entry-" + std::to_string(i)));
+    }
+    CHECK(capacity.size() == xmrig::CapabilityErrorLog::kMaxEntries);
+    CHECK(capacity.allows(3, "new-entry"));
+    CHECK(capacity.size() == xmrig::CapabilityErrorLog::kMaxEntries);
+    CHECK(capacity.allows(4, first));
+}
+
+
 } // namespace
 
 
@@ -120,5 +167,7 @@ int main()
     testParsing();
     testDivision();
     testComparisonAndEndian();
+    testGetjobCooldown();
+    testCapabilityErrorLog();
     return 0;
 }

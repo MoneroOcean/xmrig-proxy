@@ -23,6 +23,7 @@
 
 #include <bitset>
 #include <map>
+#include <string>
 #include <uv.h>
 #include <vector>
 
@@ -33,6 +34,7 @@
 #include "base/net/stratum/AlgoSwitch.h"
 /* MoneroOcean change: end */
 #include "base/net/stratum/BaseClient.h"
+#include "base/net/stratum/GetjobCooldown.h"
 #include "base/net/stratum/Job.h"
 #include "base/net/stratum/Pool.h"
 #include "base/net/stratum/SubmitResult.h"
@@ -185,6 +187,8 @@ private:
     bool m_loginInFlight        = false;
     bool m_getjobDirty          = false;
     bool m_getjobInFlight       = false;
+    std::string m_getjobAlgos;
+    GetjobCooldown m_getjobCooldown;
     uint64_t m_jobs             = 0;
     uint64_t m_keepAlive        = 0;
     uintptr_t m_key             = 0;

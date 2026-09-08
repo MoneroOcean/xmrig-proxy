@@ -71,6 +71,31 @@ uint8_t Client::m_getjobWindowCount = 0;
 } /* namespace xmrig */
 
 
+namespace {
+
+constexpr const char *kUnsupportedAlgoError = "algo array must include at least one supported pool algo:";
+
+xmrig::CapabilityErrorLog g_capabilityErrorLog;
+
+inline bool isUnsupportedAlgoError(const char *message)
+{
+    return message && strncmp(message, kUnsupportedAlgoError, strlen(kUnsupportedAlgoError)) == 0;
+}
+
+inline std::string capabilityErrorKey(const xmrig::Pool &pool, const char *message)
+{
+    std::string key(pool.host().data() ? pool.host().data() : "");
+    key.push_back(':');
+    key += std::to_string(pool.port());
+    key.push_back('\n');
+    key += message;
+
+    return key;
+}
+
+} /* namespace */
+
+
 #ifdef APP_DEBUG
 static const char *states[] = {
     "unconnected",
@@ -391,6 +416,8 @@ void xmrig::Client::setPool(const Pool &pool)
     m_nativeNonceSize = 0;
     m_nativeSubscribed = false;
     m_nativePrefixUpdated = false;
+    m_getjobAlgos.clear();
+    m_getjobCooldown.clear();
 }
 /* MoneroOcean change: end */
 
@@ -434,6 +461,8 @@ bool xmrig::Client::close()
     m_loginInFlight  = false;
     m_getjobDirty    = false;
     m_getjobInFlight = false;
+    m_getjobAlgos.clear();
+    m_getjobCooldown.clear();
 
     setState(ClosingState);
 
@@ -889,7 +918,19 @@ void xmrig::Client::sendGetjob()
         return;
     }
 
+    Document doc(kObjectType);
+    auto &allocator = doc.GetAllocator();
+    Value algos = AlgoSwitch::algosToJSON(doc);
+    StringBuffer algoBuffer(nullptr, 256);
+    Writer<StringBuffer> algoWriter(algoBuffer);
+    algos.Accept(algoWriter);
+    std::string sentAlgos(algoBuffer.GetString(), algoBuffer.GetSize());
+
     const uint64_t now = Chrono::steadyMSecs();
+    if (!m_getjobCooldown.allows(now, sentAlgos)) {
+        return;
+    }
+
     if (m_getjobWindow == 0 || now - m_getjobWindow >= kUpstreamRequestWindow) {
         m_getjobWindow = now;
         m_getjobWindowCount = 0;
@@ -902,12 +943,9 @@ void xmrig::Client::sendGetjob()
     ++m_getjobWindowCount;
     m_getjobDirty = false;
 
-    Document doc(kObjectType);
-    auto &allocator = doc.GetAllocator();
-
     Value params(kObjectType);
     params.AddMember("id", StringRef(m_rpcId.data()), allocator);
-    params.AddMember("algo", AlgoSwitch::algosToJSON(doc), allocator);
+    params.AddMember("algo", algos, allocator);
     params.AddMember("algo-perf", AlgoSwitch::algoPerfsToJSON(doc), allocator);
 
     JsonRequest::create(doc, 1, "getjob", params);
@@ -918,6 +956,7 @@ void xmrig::Client::sendGetjob()
         return;
     }
 
+    m_getjobAlgos = std::move(sentAlgos);
     m_getjobInFlight = true;
 }
 /* MoneroOcean change: end */
@@ -944,6 +983,8 @@ void xmrig::Client::onClose()
     m_nativeNonceSize = 0;
     m_nativePrefixUpdated = false;
     m_currentMessage = nullptr;
+    m_getjobAlgos.clear();
+    m_getjobCooldown.clear();
     m_job.reset();
     m_jobs = 0;
     m_rpcId = nullptr;
@@ -1154,7 +1195,14 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         if (id == 1) {
             if (getjob) {
                 m_getjobInFlight = false;
-                m_getjobDirty = false;
+                if (isUnsupportedAlgoError(message)) {
+                    m_getjobDirty = true;
+                    m_getjobCooldown.reject(Chrono::steadyMSecs(), m_getjobAlgos);
+                }
+                else {
+                    m_getjobDirty = false;
+                    m_getjobCooldown.clear();
+                }
             }
             else {
                 m_loginInFlight = false;
@@ -1162,7 +1210,13 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         }
 
         if (!handleSubmitResponse(id, message) && !isQuiet()) {
-            LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), message, Json::getInt(error, "code"));
+            const bool duplicateCapabilityError = id == 1
+                && isUnsupportedAlgoError(message)
+                && !g_capabilityErrorLog.allows(Chrono::steadyMSecs(), capabilityErrorKey(m_pool, message));
+
+            if (!duplicateCapabilityError) {
+                LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), message, Json::getInt(error, "code"));
+            }
         }
 
         /* A getjob rejection is not a failed login.  In particular, do not force
@@ -1191,6 +1245,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
     if (id == 1) {
         if (m_getjobInFlight && result.IsNull()) {
             m_getjobInFlight = false;
+            m_getjobCooldown.clear();
             if (m_getjobDirty) {
                 sendGetjob();
             }
@@ -1206,6 +1261,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         if (m_getjobInFlight) {
             m_getjobInFlight = false;
             if (parseGetjob(result, &code)) {
+                m_getjobCooldown.clear();
                 const rapidjson::Value &job = Json::getObject(result, "job");
                 if (m_job.isValid() && (job.IsObject() || result.HasMember("job_id"))) {
                     m_listener->onJobReceived(this, m_job, job.IsObject() ? job : result);
