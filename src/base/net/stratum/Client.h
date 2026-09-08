@@ -25,6 +25,7 @@
 #include <map>
 #include <string>
 #include <uv.h>
+#include <deque>
 #include <vector>
 
 
@@ -155,6 +156,7 @@ private:
     void parseResponse(int64_t id, const rapidjson::Value &result, const rapidjson::Value &error);
     void ping();
     void sendGetjob();
+    void sendGetjobRequest();
     void read(ssize_t nread, const uv_buf_t *buf);
     void reconnect();
     void setState(SocketState state);
@@ -209,6 +211,7 @@ private:
     static uint64_t m_getjobWindow;
     static uint8_t m_loginWindowCount;
     static uint8_t m_getjobWindowCount;
+    static std::deque<Client *> m_getjobQueue;
     static Storage<Client> m_storage;
 };
 

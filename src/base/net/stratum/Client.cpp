@@ -54,6 +54,8 @@
 #include "net/JobResult.h"
 #include "proxy/Miner.h"
 
+#include <algorithm>
+
 
 #ifdef _MSC_VER
 #   define strncasecmp(x,y,z) _strnicmp(x,y,z)
@@ -67,6 +69,7 @@ uint64_t Client::m_loginWindow      = 0;
 uint64_t Client::m_getjobWindow     = 0;
 uint8_t Client::m_loginWindowCount  = 0;
 uint8_t Client::m_getjobWindowCount = 0;
+std::deque<Client *> Client::m_getjobQueue;
 
 } /* namespace xmrig */
 
@@ -120,6 +123,7 @@ xmrig::Client::Client(int id, const char *agent, IClientListener *listener) :
 
 xmrig::Client::~Client()
 {
+    m_getjobQueue.erase(std::remove(m_getjobQueue.begin(), m_getjobQueue.end(), this), m_getjobQueue.end());
     delete m_socket;
 }
 
@@ -767,7 +771,11 @@ void xmrig::Client::connect(const sockaddr *addr)
         uv_tcp_keepalive(m_socket, 1, 60);
     }
 
-    uv_tcp_connect(req, m_socket, addr, onConnect);
+    const int status = uv_tcp_connect(req, m_socket, addr, onConnect);
+    if (status < 0) {
+        // Immediate failures do not invoke the callback or release the request.
+        onConnect(req, status);
+    }
 }
 
 
@@ -905,6 +913,8 @@ void xmrig::Client::login()
     }
 
     captureLogOffered(Json::getValue(doc, "params"));
+    // This request includes current capabilities; later miner changes still need getjob.
+    m_getjobDirty = false;
     m_loginInFlight = true;
 }
 
@@ -918,6 +928,31 @@ void xmrig::Client::getjob()
 
 
 void xmrig::Client::sendGetjob()
+{
+    if (!m_getjobDirty) {
+        return;
+    }
+
+    // Coalesce each group's changes and share the existing budget fairly under miner churn.
+    if (std::find(m_getjobQueue.begin(), m_getjobQueue.end(), this) == m_getjobQueue.end()) {
+        m_getjobQueue.push_back(this);
+    }
+
+    const uint64_t now = Chrono::steadyMSecs();
+    if (m_getjobWindow == 0 || now - m_getjobWindow >= kUpstreamRequestWindow) {
+        m_getjobWindow = now;
+        m_getjobWindowCount = 0;
+    }
+
+    while (!m_getjobQueue.empty() && m_getjobWindowCount < kUpstreamRequestsPerWindow) {
+        Client *client = m_getjobQueue.front();
+        m_getjobQueue.pop_front();
+        client->sendGetjobRequest();
+    }
+}
+
+
+void xmrig::Client::sendGetjobRequest()
 {
     using namespace rapidjson;
 
@@ -935,15 +970,6 @@ void xmrig::Client::sendGetjob()
 
     const uint64_t now = Chrono::steadyMSecs();
     if (!m_getjobCooldown.allows(now, sentAlgos)) {
-        return;
-    }
-
-    if (m_getjobWindow == 0 || now - m_getjobWindow >= kUpstreamRequestWindow) {
-        m_getjobWindow = now;
-        m_getjobWindowCount = 0;
-    }
-
-    if (m_getjobWindowCount >= kUpstreamRequestsPerWindow) {
         return;
     }
 
@@ -1299,9 +1325,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         }
 
         m_failures = 0;
-        /* The login carries the current group capabilities, so a queued getjob
-         * from the previous socket has already been satisfied. */
-        m_getjobDirty = false;
+        // Preserve capability changes made while the login reply was in flight.
         m_getjobInFlight = false;
         m_listener->onLoginSuccess(this);
 
@@ -1312,6 +1336,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
             m_listener->onJobReceived(this, m_job, job.IsObject() ? job : result);
         }
 
+        sendGetjob();
         return;
     }
 
