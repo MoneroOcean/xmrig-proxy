@@ -39,6 +39,7 @@
 #include "proxy/events/AcceptEvent.h"
 #include "proxy/events/SubmitEvent.h"
 #include "proxy/Miner.h"
+#include "proxy/UpstreamLog.h"
 #include "proxy/splitters/extra_nonce/ExtraNonceStorage.h"
 
 
@@ -216,12 +217,12 @@ void xmrig::ExtraNonceMapper::onLogin(IStrategy *strategy, IClient *client, rapi
 }
 
 
-void xmrig::ExtraNonceMapper::onPause(IStrategy *)
+void xmrig::ExtraNonceMapper::onPause(IStrategy *strategy)
 {
     m_storage->setActive(false);
 
     if (!isSuspended()) {
-        LOG_ERR("%s " CYAN("%04u ") RED("no active pools, stop"), Tags::network(), 0);
+        logUpstreamPause(strategy, 0, m_storage->size(), m_storage->job());
     }
 }
 

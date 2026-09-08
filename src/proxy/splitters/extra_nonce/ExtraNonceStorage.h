@@ -55,6 +55,7 @@ public:
 
     inline bool isActive() const       { return m_active; }
     inline const Job &job() const      { return m_job; }
+    inline size_t size() const         { return m_miners.size(); }
     inline void setActive(bool active) { m_active = active; }
 
 #   ifdef APP_DEVEL

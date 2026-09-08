@@ -12,6 +12,8 @@ const {
 } = require("./common/proxy_harness.js");
 
 const UNSUPPORTED_ALGO_ERROR = "algo array must include at least one supported pool algo: no matching work";
+const TEMPLATE_WAIT_ERROR = "No block template yet. Please wait.";
+const GC_IDLE_TIMEOUT_MS = 70000;
 const RESTRICTIVE_CAPABILITIES = {
     algos: ["rx/0"],
     perfs: { "rx/0": 1000 }
@@ -79,6 +81,90 @@ class AlgoRejectPool extends FakePool {
             respond();
         }
     }
+}
+
+class TemplateEofPool extends FakePool {
+    constructor(timeoutMs, options = {}) {
+        super(timeoutMs, options);
+        this.options = Object.assign({
+            closeDelayMs: 10,
+            errorDelayMs: 0,
+            failLogin: false
+        }, options);
+    }
+
+    onConnection(socket) {
+        super.onConnection(socket);
+        this.connections[this.connections.length - 1].templateFailure = false;
+    }
+
+    onMessage(connection, message) {
+        if (message.method === "login" && this.options.failLogin) {
+            this.logins.push({ at: Date.now(), connection, message, job: undefined });
+            connection.peer.send({
+                id: message.id,
+                jsonrpc: "2.0",
+                error: { code: -1, message: TEMPLATE_WAIT_ERROR },
+                result: null
+            });
+            setTimeout(() => connection.peer.close(), this.options.closeDelayMs);
+            return;
+        }
+
+        if (message.method !== "getjob" || connection.templateFailure) {
+            super.onMessage(connection, message);
+            return;
+        }
+
+        const job = this.nextJob();
+        connection.templateFailure = true;
+        this.getjobs.push({ at: Date.now(), connection, message, job });
+
+        const respond = () => {
+            if (connection.peer.closed) {
+                return;
+            }
+
+            connection.peer.send({
+                id: message.id,
+                jsonrpc: "2.0",
+                error: { code: -1, message: TEMPLATE_WAIT_ERROR },
+                result: null
+            });
+            setTimeout(() => connection.peer.close(), this.options.closeDelayMs);
+        };
+
+        if (this.options.errorDelayMs > 0) {
+            setTimeout(respond, this.options.errorDelayMs);
+        }
+        else {
+            respond();
+        }
+    }
+}
+
+function outputLines(proxy) {
+    return proxy.output.join("").split(/\r?\n/).filter(Boolean);
+}
+
+async function waitForLogLine(proxy, config, predicate, description) {
+    await waitFor(() => outputLines(proxy).some(predicate), config.timeoutMs, description);
+    return outputLines(proxy).find(predicate);
+}
+
+function parseClientTag(line, label) {
+    const match = line.match(/\[upstream=(\d+) algo=([^\s]+) offered=([^\]]+)\]/);
+    assert.ok(match, `${label} has no structured upstream context`);
+
+    return {
+        upstream: match[1],
+        algo: match[2],
+        offered: match[3] === "none" ? [] : match[3].split(",")
+    };
+}
+
+function assertSafeClientContext(line, label) {
+    assert.doesNotMatch(line, /password|pass=|algo-perf|perf(?:ormance)?/i, `${label} leaked credential/perf context`);
 }
 
 test.describe("upstream request pacing and reconnect recovery", { concurrency: false }, () => {
@@ -215,6 +301,143 @@ test.describe("upstream request pacing and reconnect recovery", { concurrency: f
             assert.doesNotMatch(proxy.output.join(""), /send failed, invalid state/);
         }, {
             poolOptions: { closeOnGetjob: true }
+        });
+    });
+
+    test("logs none before the first job and only the last offered algorithms on template errors", async () => {
+        await withProxy(async ({ config, pool, proxy }) => {
+            const offered = pool.logins[0].message.params.algo;
+            const errorLine = await waitForLogLine(
+                proxy,
+                config,
+                line => line.includes(TEMPLATE_WAIT_ERROR),
+                "template error context before first job"
+            );
+            const tag = parseClientTag(errorLine, "template error");
+
+            assert.equal(tag.algo, "none", "a client without a job must log algo=none");
+            assert.deepEqual(tag.offered, offered, "error context must retain the last sent algo array");
+            assertSafeClientContext(errorLine, "template error");
+
+            const eofLine = await waitForLogLine(
+                proxy,
+                config,
+                line => line.includes("read error: \"end of file\""),
+                "EOF context after template error"
+            );
+            const eofTag = parseClientTag(eofLine, "EOF context");
+            assert.equal(eofTag.algo, tag.algo, "EOF context must retain the current job marker");
+            assert.deepEqual(eofTag.offered, tag.offered, "EOF context must retain the last offered algo array");
+            assert.equal(eofTag.upstream, tag.upstream, "EOF context must retain the same upstream id");
+            assertSafeClientContext(eofLine, "EOF context");
+        }, {
+            poolFactory: timeout => new TemplateEofPool(timeout, {
+                failLogin: true
+            })
+        });
+    });
+
+    test("keeps in-flight offered algorithms stable and identifies distinct nonempty groups", async () => {
+        await withProxy(async ({ addMiner, config, pool, proxy }) => {
+            await addMiner("miner-wide-inflight", CAPABILITIES.superset);
+            await pool.waitForGetjobs(1);
+            const offered = pool.getjobs[0].message.params.algo;
+
+            await addMiner("miner-narrow-inflight", CAPABILITIES.base);
+            assert.equal(pool.getjobs.length, 1, "the changed group must remain queued while getjob is in flight");
+
+            const firstError = await waitForLogLine(
+                proxy,
+                config,
+                line => line.includes(TEMPLATE_WAIT_ERROR),
+                "first in-flight template error"
+            );
+            const firstTag = parseClientTag(firstError, "first template error");
+            assert.deepEqual(firstTag.offered, offered, "context must use the last sent array, not the unsent group");
+            assert.equal(firstTag.algo, "cn-heavy/xhv");
+            assertSafeClientContext(firstError, "first template error");
+
+            const firstPause = await waitForLogLine(
+                proxy,
+                config,
+                line => line.includes("paused: no active upstream"),
+                "first nonempty group pause"
+            );
+            assert.match(firstPause, /miners=2/);
+            assert.match(firstPause, /last_error="end of file"/);
+
+            await addMiner("miner-second-group", {
+                algos: ["cn/half"],
+                perfs: { "cn/half": 2 }
+            });
+            await waitFor(
+                () => pool.logins.some(login => login.message.params
+                    && Array.isArray(login.message.params.algo)
+                    && login.message.params.algo.length === 1
+                    && login.message.params.algo[0] === "cn/half"),
+                config.timeoutMs,
+                "second group login"
+            );
+            const secondGroupLogin = pool.logins.find(login => login.message.params
+                && Array.isArray(login.message.params.algo)
+                && login.message.params.algo.length === 1
+                && login.message.params.algo[0] === "cn/half");
+            secondGroupLogin.connection.peer.close();
+
+            const firstGroup = firstPause.match(/group=(\d+)/)[1];
+            const secondPause = await waitForLogLine(
+                proxy,
+                config,
+                line => {
+                    if (!line.includes("paused: no active upstream")) {
+                        return false;
+                    }
+
+                    const match = line.match(/group=(\d+)/);
+                    return match && match[1] !== firstGroup;
+                },
+                "second nonempty group pause"
+            );
+            const firstFields = firstPause.match(/group=(\d+) miners=(\d+) .* upstream=(\d+)/);
+            const secondFields = secondPause.match(/group=(\d+) miners=(\d+) .* upstream=(\d+)/);
+            assert.ok(firstFields && secondFields, "pause lines have group/miner/upstream fields");
+            assert.notEqual(firstFields[1], secondFields[1], "distinct mapper groups must have distinct ids");
+            assert.notEqual(firstFields[3], secondFields[3], "distinct clients must have distinct upstream ids");
+            assert.equal(firstFields[3], firstTag.upstream, "pause context must retain the failing client id");
+            assert.ok(Number(firstFields[2]) > 0 && Number(secondFields[2]) > 0,
+                "pause context must retain nonzero miner counts");
+            assert.match(secondPause, /last_error="end of file"/);
+        }, {
+            poolFactory: timeout => new TemplateEofPool(timeout, { errorDelayMs: 250 })
+        });
+    });
+
+    test("logs an empty nonprimary group idle transition once during GC", async () => {
+        await withProxy(async ({ addMiner, config, pool, proxy }) => {
+            await addMiner("miner-primary", CAPABILITIES.base);
+            await pool.waitForGetjobs(1);
+
+            const emptyMiner = await addMiner("miner-empty-group", {
+                algos: ["cn/half"],
+                perfs: { "cn/half": 2 }
+            });
+            await pool.waitForLogins(2);
+            emptyMiner.close();
+
+            const idleLine = await waitForLogLine(
+                proxy,
+                { timeoutMs: Math.max(config.timeoutMs, GC_IDLE_TIMEOUT_MS) },
+                line => line.includes("miners=0 idle: last miner disconnected; closing upstream"),
+                "empty group idle transition"
+            );
+            assert.match(idleLine, /group=\d{4} miners=0 idle/);
+
+            await delay(1200);
+            assert.equal(
+                outputLines(proxy).filter(line => line.includes("miners=0 idle: last miner disconnected; closing upstream")).length,
+                1,
+                "empty group idle transition must be logged once"
+            );
         });
     });
 });

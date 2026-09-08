@@ -74,6 +74,10 @@ public:
     Client(int id, const char *agent, IClientListener *listener);
     ~Client() override;
 
+    const char *tag() const override;
+    inline uintptr_t logId() const noexcept { return m_key; }
+    const char *lastError() const;
+
     /* MoneroOcean change: begin Public wrappers let nonce splitters update normal stratum clients while avoiding MO-specific IClient methods. */
     bool tryMiner(const Miner *miner, int upstreamCount) const;
     void addMiner(const Miner *miner);
@@ -119,7 +123,7 @@ protected:
     /* MoneroOcean change: end */
     virtual void parseNotification(const char* method, const rapidjson::Value& params, const rapidjson::Value& error);
 
-    bool close();
+    bool close(const char *reason = nullptr);
     virtual void onClose();
 
 private:
@@ -134,6 +138,10 @@ private:
     void parseNativeSubscribe(const rapidjson::Value &result);
     void setNativeMetadata(const rapidjson::Value &result, bool notifyCurrentJob = false);
     bool setNativePrefix(const char *prefix, uint32_t remainingBytes, const rapidjson::Value *message = nullptr);
+    void captureLogOffered(const rapidjson::Value &params);
+    void setLogCloseReason(const char *reason);
+    void clearLogCloseReason();
+    static std::string logText(const char *text);
     bool send(BIO *bio);
     void subscribeNative();
     bool verifyAlgorithm(const Algorithm &algorithm, const char *algo) const;
@@ -181,6 +189,9 @@ private:
     bool m_nativePrefixUpdated        = false;
     const rapidjson::Value *m_currentMessage = nullptr;
     String m_rpcId;
+    mutable std::string m_logTag;
+    std::string m_logOffered;
+    std::string m_logCloseReason;
     Tls *m_tls                  = nullptr;
     uint64_t m_expire           = 0;
     bool m_loginPending         = false;

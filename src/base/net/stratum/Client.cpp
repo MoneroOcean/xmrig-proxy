@@ -193,7 +193,7 @@ int64_t xmrig::Client::send(const rapidjson::Value &obj)
     const size_t size = buffer.GetSize();
     if (size > kMaxSendBufferSize) {
         LOG_ERR("%s " RED("send failed: ") RED_BOLD("\"max send buffer size exceeded: %zu\""), tag(), size);
-        close();
+        close("send buffer limit");
 
         return -1;
     }
@@ -223,7 +223,7 @@ int64_t xmrig::Client::submit(const JobResult &result)
 #   endif
 
     if (result.diff == 0) {
-        close();
+        close("invalid share difficulty");
 
         return -1;
     }
@@ -303,6 +303,8 @@ int64_t xmrig::Client::submit(const JobResult &result)
 
 void xmrig::Client::connect()
 {
+    clearLogCloseReason();
+
     if (m_pool.proxy().isValid()) {
         m_socks5 = new Socks5(this);
         resolve(m_pool.proxy().host());
@@ -354,7 +356,7 @@ void xmrig::Client::tick(uint64_t now)
 
         if (m_expire && now > m_expire) {
             LOG_DEBUG_ERR("[%s] timeout", url());
-            close();
+            close("response timeout");
         }
         else if (m_keepAlive && now > m_keepAlive) {
             ping();
@@ -368,7 +370,7 @@ void xmrig::Client::tick(uint64_t now)
     }
 
     if (m_state == ConnectingState && m_expire && now > m_expire) {
-        close();
+        close("connect timeout");
     }
 }
 
@@ -416,6 +418,8 @@ void xmrig::Client::setPool(const Pool &pool)
     m_nativeNonceSize = 0;
     m_nativeSubscribed = false;
     m_nativePrefixUpdated = false;
+    m_logOffered.clear();
+    clearLogCloseReason();
     m_getjobAlgos.clear();
     m_getjobCooldown.clear();
 }
@@ -446,7 +450,7 @@ void xmrig::Client::onResolved(const DnsRecords &records, int status, const char
 }
 
 
-bool xmrig::Client::close()
+bool xmrig::Client::close(const char *reason)
 {
     if (m_state == ClosingState) {
         return m_socket != nullptr;
@@ -455,6 +459,8 @@ bool xmrig::Client::close()
     if (m_state == UnconnectedState || m_socket == nullptr) {
         return false;
     }
+
+    setLogCloseReason(reason);
 
     m_rpcId = nullptr;
     m_loginPending   = false;
@@ -620,7 +626,7 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code, const ra
         LOG_WARN("%s " YELLOW("duplicate job received, reconnect"), tag());
     }
 
-    close();
+    close("duplicate job");
     return false;
 }
 
@@ -691,7 +697,7 @@ bool xmrig::Client::write(const uv_buf_t &buf)
         LOG_ERR("%s " RED("write error: ") RED_BOLD("\"%s\""), tag(), uv_strerror(rc));
     }
 
-    close();
+    close(uv_strerror(rc));
 
     return false;
 }
@@ -898,6 +904,7 @@ void xmrig::Client::login()
         return;
     }
 
+    captureLogOffered(Json::getValue(doc, "params"));
     m_loginInFlight = true;
 }
 
@@ -956,6 +963,7 @@ void xmrig::Client::sendGetjob()
         return;
     }
 
+    captureLogOffered(Json::getValue(doc, "params"));
     m_getjobAlgos = std::move(sentAlgos);
     m_getjobInFlight = true;
 }
@@ -1080,7 +1088,7 @@ void xmrig::Client::parse(char *line, size_t len)
             m_listener->onJobReceived(this, m_job, doc);
         }
         else {
-            close();
+            close("invalid native notify");
         }
 
         return;
@@ -1096,7 +1104,7 @@ void xmrig::Client::parse(char *line, size_t len)
                 m_listener->onJobReceived(this, m_job, doc);
             }
             else {
-                close();
+                close("invalid native job");
             }
 
             return;
@@ -1114,7 +1122,7 @@ void xmrig::Client::parse(char *line, size_t len)
     if (error.IsObject()) {
         if (!isQuiet()) {
             LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"),
-                    tag(), Json::getString(error, "message"), Json::getInt(error, "code"));
+                    tag(), logText(Json::getString(error, "message")).c_str(), Json::getInt(error, "code"));
         }
 
         return;
@@ -1174,7 +1182,7 @@ void xmrig::Client::parseNotification(const char *method, const rapidjson::Value
             m_listener->onJobReceived(this, m_job, params);
         }
         else {
-            close();
+            close("invalid job notification");
         }
 
         return;
@@ -1215,14 +1223,14 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
                 && !g_capabilityErrorLog.allows(Chrono::steadyMSecs(), capabilityErrorKey(m_pool, message));
 
             if (!duplicateCapabilityError) {
-                LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), message, Json::getInt(error, "code"));
+                LOG_ERR("%s " RED("error: ") RED_BOLD("\"%s\"") RED(", code: ") RED_BOLD("%d"), tag(), logText(message).c_str(), Json::getInt(error, "code"));
             }
         }
 
         /* A getjob rejection is not a failed login.  In particular, do not force
          * the backup strategy to reconnect for a pool-side getjob rate limit. */
         if ((!getjob && m_id == 1) || isCriticalError(message)) {
-            close();
+            close(message);
         }
 
         return;
@@ -1271,7 +1279,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
                 if (!isQuiet()) {
                     LOG_ERR("%s " RED("getjob error code: ") RED_BOLD("%d"), tag(), code);
                 }
-                close();
+                close("invalid getjob response");
             }
 
             if (m_getjobDirty) {
@@ -1286,7 +1294,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
                 LOG_ERR("%s " RED("login error code: ") RED_BOLD("%d"), tag(), code);
             }
 
-            close();
+            close("invalid login response");
             return;
         }
 
@@ -1325,7 +1333,7 @@ void xmrig::Client::read(ssize_t nread, const uv_buf_t *buf)
             LOG_ERR("%s " RED("read error: ") RED_BOLD("\"%s\""), tag(), uv_strerror(static_cast<int>(nread)));
         }
 
-        close();
+        close(uv_strerror(static_cast<int>(nread)));
         return;
     }
 
@@ -1488,7 +1496,7 @@ void xmrig::Client::onConnect(uv_connect_t *req, int status)
             return;
         }
 
-        client->close();
+        client->close(uv_strerror(status));
         return;
     }
 

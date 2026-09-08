@@ -42,6 +42,7 @@
 #include "proxy/events/AcceptEvent.h"
 #include "proxy/events/SubmitEvent.h"
 #include "proxy/Miner.h"
+#include "proxy/UpstreamLog.h"
 #include "proxy/splitters/nicehash/NonceStorage.h"
 
 
@@ -380,12 +381,12 @@ void xmrig::NonceMapper::onLogin(IStrategy *strategy, IClient *client, rapidjson
 }
 
 
-void xmrig::NonceMapper::onPause(IStrategy *)
+void xmrig::NonceMapper::onPause(IStrategy *strategy)
 {
     m_storage->setActive(false);
 
     if (!isSuspended()) {
-        LOG_ERR("%s " CYAN("%04u ") RED("no active pools, stop"), Tags::network(), m_id);
+        logUpstreamPause(strategy, m_id, m_storage->size(), m_storage->job());
     }
 }
 
@@ -457,6 +458,10 @@ void xmrig::NonceMapper::setJob(const char *host, int port, const Job &job)
 
 void xmrig::NonceMapper::suspend()
 {
+    if (m_id != 0 && m_storage->size() == 0) {
+        LOG_INFO("%s group=%04zu miners=0 idle: last miner disconnected; closing upstream", Tags::network(), m_id);
+    }
+
     m_suspended = 1;
     m_storage->setActive(false);
     m_storage->reset();
