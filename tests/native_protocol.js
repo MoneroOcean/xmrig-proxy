@@ -12,6 +12,20 @@ const capabilities = {
 };
 const options = { poolFactory: timeout => new NativePool(timeout) };
 
+class C29NativePool extends NativePool {
+    onMessage(connection, message) {
+        if (message.method !== "getjob" || !message.params || !Array.isArray(message.params.algo) || !message.params.algo.includes("c29")) {
+            return super.onMessage(connection, message);
+        }
+
+        const job = fixture("c29", "initial-c29", "grin", connection.rpcId).at(-1).params;
+        this.getjobs.push({ connection, message, job });
+        const metadata = { id: connection.rpcId, extra_nonce: "abcd",
+            extensions: ["algo", "keepalive", "mo-native", "submit-result"] };
+        connection.peer.send({ id: message.id, error: null, result: Object.assign(metadata, job) });
+    }
+}
+
 function jobMessage(message, id) {
     return message.method === "job" && message.params.job_id === id ||
         message.method === "mining.notify" && message.params[0] === id ||
@@ -293,5 +307,31 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
                 assert.deepEqual(sent.message.params.pow, pow);
             }
         }, options);
+    });
+
+    test("C29 object jobs rewrite upstream IDs for Grin, Tube, and Xtmc", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            const miner = await addMiner("native-c29-ids", {
+                algos: ["c29"],
+                params: { extensions: ["mo-native", "submit-result"] }
+            });
+            const login = miner.peer.messages.find(message => message.id === 1);
+            assert.ok(login && login.result && login.result.job && login.result.job.id);
+            assert.equal(login.result.job.algo, "c29");
+            const downstreamId = login.result.id;
+            const upstream = pool.connections.at(-1);
+            const upstreamId = upstream.rpcId;
+            assert.equal(login.result.job.id, downstreamId, "initial Grin job uses downstream ID");
+            assert.notEqual(login.result.job.id, upstreamId, "initial Grin job does not retain upstream ID");
+
+            for (const profile of ["grin", "tube", "xtmc"]) {
+                const id = `c29-id-${profile}`;
+                pool.push(upstream, "c29", id, profile);
+                const job = await miner.peer.waitForMessage(message => jobMessage(message, id),
+                    miner.timeoutMs, `c29 ${id}`);
+                assert.equal(job.params.id, downstreamId, `${profile} job uses downstream ID`);
+                assert.notEqual(job.params.id, upstreamId, `${profile} job does not retain upstream ID`);
+            }
+        }, { poolFactory: timeout => new C29NativePool(timeout) });
     });
 });

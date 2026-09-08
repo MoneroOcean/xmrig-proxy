@@ -199,6 +199,9 @@ void Miner::sendNative(const Job &job) {
     auto &a = wire.GetAllocator();
     Value &params = wire["params"];
     const bool nativeArray = params.IsArray();
+    if (!nativeArray && params.IsObject() && params.HasMember("id")) {
+        params["id"].SetString(m_rpcId.data(), static_cast<SizeType>(m_rpcId.size()), a);
+    }
     const uint64_t diff = assignedDiff(job);
     const String prefix = assignedPrefix(job);
     if (nativeArray && prefix.isEmpty()) return;

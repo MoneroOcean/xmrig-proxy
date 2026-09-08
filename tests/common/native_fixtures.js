@@ -9,7 +9,7 @@ const MAX = (1n << 256n) - 1n;
 const target = difficulty => (MAX / BigInt(difficulty)).toString(16).padStart(64, "0");
 
 // Real nodejs-pool wire layouts, with inert headers and synthetic targets.
-function fixture(algo, id, profile) {
+function fixture(algo, id, profile, upstreamId) {
     const header = "12".repeat(32);
     const seed = "34".repeat(32);
     const baseParams = { job_id: id, algo, height: 1000,
@@ -29,6 +29,7 @@ function fixture(algo, id, profile) {
         { method: "mining.notify", algo, params: [id, 1000, header, "", "", 2, (MAX / 10000n).toString(), "", true] }
     ];
     if (algo === "c29") {
+        if (upstreamId !== undefined) base.params.id = upstreamId;
         if (profile === "xtmc") {
             const compact = Buffer.alloc(8);
             compact.writeBigUInt64LE(((1n << 64n) - 1n) / 10000n);
@@ -71,7 +72,7 @@ class NativePool extends FakePool {
     }
 
     push(connection, algo, id, profile) {
-        for (const message of fixture(algo, id, profile)) connection.peer.send(message);
+        for (const message of fixture(algo, id, profile, connection.rpcId)) connection.peer.send(message);
     }
 }
 
