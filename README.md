@@ -14,6 +14,9 @@ The codebase is shared with the [XMRig](https://github.com/xmrig/xmrig) miner.
 ## Compatibility
 Compatible with any pool and any miner that supports NiceHash.
 
+MoneroOcean native algorithm support and the optional miner capabilities are
+described in [MoneroOcean native Stratum](doc/MONEROOCEAN_NATIVE.md).
+
 ## Why?
 This proxy is designed to handle donation traffic from XMRig. No other solution works well with high connection and disconnection rates.
 

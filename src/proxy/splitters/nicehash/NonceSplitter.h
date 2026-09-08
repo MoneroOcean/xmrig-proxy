@@ -42,6 +42,7 @@ class LoginEvent;
 class Miner;
 class NonceMapper;
 class Stats;
+class SubscribeEvent;
 class SubmitEvent;
 
 
@@ -69,7 +70,9 @@ protected:
     void onEvent(IEvent *event) override;
 
 private:
+    bool assign(Miner *miner);
     void login(LoginEvent *event);
+    void subscribe(SubscribeEvent *event);
     void remove(Miner *miner);
     void submit(SubmitEvent *event);
 

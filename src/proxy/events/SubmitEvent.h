@@ -37,6 +37,11 @@ namespace xmrig {
 class SubmitEvent : public MinerEvent
 {
 public:
+    // Dispatch destroys placement events. Copy the final status before that
+    // destruction instead of reading the event after start() returns.
+    ~SubmitEvent() override { if (m_errorOut) *m_errorOut = m_error; }
+    bool start(Error::Code *out = nullptr) { m_errorOut = out; return Event::start(); }
+
     static inline SubmitEvent *create(Miner *miner, int64_t id, const char *jobId, const char *nonce, const char *result, const Algorithm &algorithm, const char* sig, const char* sig_data, const char* commitment, uint8_t view_tag, int64_t extra_nonce)
     {
         return new (m_buf) SubmitEvent(miner, id, jobId, nonce, result, algorithm, sig, sig_data, commitment, view_tag, extra_nonce);
@@ -62,6 +67,7 @@ protected:
 
 private:
     Error::Code m_error;
+    Error::Code *m_errorOut = nullptr;
 };
 
 

@@ -121,6 +121,8 @@ xmrig::Proxy::Proxy(Controller *controller) :
     Events::subscribe(IEvent::LoginType, m_accessLog);
     Events::subscribe(IEvent::LoginType, m_workers);
 
+    Events::subscribe(IEvent::SubscribeType, splitter);
+
     Events::subscribe(IEvent::SubmitType, m_donate);
     Events::subscribe(IEvent::SubmitType, splitter);
     Events::subscribe(IEvent::SubmitType, m_stats);

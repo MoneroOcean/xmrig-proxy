@@ -30,6 +30,7 @@
 #include "proxy/Counters.h"
 #include "proxy/events/CloseEvent.h"
 #include "proxy/events/LoginEvent.h"
+#include "proxy/events/SubscribeEvent.h"
 #include "proxy/events/SubmitEvent.h"
 #include "proxy/Miner.h"
 #include "proxy/splitters/nicehash/NonceMapper.h"
@@ -161,6 +162,10 @@ void xmrig::NonceSplitter::onEvent(IEvent *event)
         login(static_cast<LoginEvent*>(event));
         break;
 
+    case IEvent::SubscribeType:
+        subscribe(static_cast<SubscribeEvent*>(event));
+        break;
+
     case IEvent::SubmitType:
         submit(static_cast<SubmitEvent*>(event));
         break;
@@ -171,17 +176,17 @@ void xmrig::NonceSplitter::onEvent(IEvent *event)
 }
 
 
-void xmrig::NonceSplitter::login(LoginEvent *event)
+bool xmrig::NonceSplitter::assign(Miner *miner)
 {
-    if (event->miner()->routeId() != -1) {
-        return;
+    if (!miner) {
+        return false;
     }
 
     // try reuse active upstreams.
     for (NonceMapper *mapper : m_upstreams) {
         /* MoneroOcean change: begin Reuse an upstream only when the miner's normalized algo/algo-perf set fits that group. */
-        if (mapper->tryMiner(event->miner(), m_upstreams.size()) && !mapper->isSuspended() && mapper->add(event->miner())) {
-            return;
+        if (!mapper->isSuspended() && mapper->tryMiner(miner, m_upstreams.size()) && mapper->add(miner)) {
+            return true;
         }
         /* MoneroOcean change: end */
     }
@@ -189,14 +194,55 @@ void xmrig::NonceSplitter::login(LoginEvent *event)
     // try reuse suspended upstreams.
     for (NonceMapper *mapper : m_upstreams) {
         /* MoneroOcean change: begin Suspended upstreams are also checked for algo/perf compatibility before reuse. */
-        if (mapper->tryMiner(event->miner(), m_upstreams.size()) && mapper->isSuspended() && mapper->add(event->miner())) {
-            return;
+        if (mapper->isSuspended() && mapper->tryMiner(miner, m_upstreams.size()) && mapper->add(miner)) {
+            return true;
         }
         /* MoneroOcean change: end */
     }
 
     connect();
-    login(event);
+    NonceMapper *mapper = m_upstreams.back();
+
+    return mapper->tryMiner(miner, m_upstreams.size()) && mapper->add(miner);
+}
+
+
+void xmrig::NonceSplitter::login(LoginEvent *event)
+{
+    if (event->miner()->routeId() != -1) {
+        return;
+    }
+
+    if (event->miner()->mapperId() >= 0) {
+        const size_t id = static_cast<size_t>(event->miner()->mapperId());
+        if (id < m_upstreams.size()) {
+            m_upstreams[id]->refresh(event->miner());
+        }
+
+        return;
+    }
+
+    assign(event->miner());
+}
+
+
+void xmrig::NonceSplitter::subscribe(SubscribeEvent *event)
+{
+    Miner *miner = event ? event->miner() : nullptr;
+    if (!miner || miner->mapperId() >= 0) {
+        return;
+    }
+
+    const auto &pools = m_controller->config()->pools().data();
+    if (pools.empty() || !pools.front().algorithm().isValid()) {
+        event->reject();
+        return;
+    }
+
+    miner->setNativeAlgorithm(pools.front().algorithm());
+    if (!assign(miner)) {
+        event->reject();
+    }
 }
 
 
@@ -206,7 +252,12 @@ void xmrig::NonceSplitter::remove(Miner *miner)
         return;
     }
 
-    m_upstreams[miner->mapperId()]->remove(miner);
+    const size_t id = static_cast<size_t>(miner->mapperId());
+    if (id >= m_upstreams.size()) {
+        return;
+    }
+
+    m_upstreams[id]->remove(miner);
 }
 
 
@@ -216,5 +267,10 @@ void xmrig::NonceSplitter::submit(SubmitEvent *event)
         return;
     }
 
-    m_upstreams[event->miner()->mapperId()]->submit(event);
+    const size_t id = static_cast<size_t>(event->miner()->mapperId());
+    if (id >= m_upstreams.size()) {
+        return event->setError(Error::BadGateway);
+    }
+
+    m_upstreams[id]->submit(event);
 }

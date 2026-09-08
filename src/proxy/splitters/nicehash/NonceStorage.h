@@ -51,6 +51,7 @@ public:
     bool add(Miner *miner);
     bool isUsed() const;
     bool isValidJobId(const String &id) const;
+    const Job *findJob(const String &id) const;
     Miner *miner(int64_t id);
     void remove(const Miner *miner);
     void reset();
@@ -58,7 +59,7 @@ public:
 
     inline bool isActive() const       { return m_active; }
     inline const Job &job() const      { return m_job; }
-    inline void setActive(bool active) { m_active = active; }
+    void setActive(bool active);
 
 #   ifdef APP_DEVEL
     void printState(size_t id);

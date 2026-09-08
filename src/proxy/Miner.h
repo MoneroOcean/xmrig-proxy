@@ -34,6 +34,9 @@
 /* MoneroOcean change: begin Miners carry normalized algo/algo-perf capabilities so upstream grouping does not depend on raw login JSON. */
 #include "base/crypto/Algorithm.h"
 /* MoneroOcean change: end */
+#include "base/net/stratum/Job.h"
+#include <map>
+#include <utility>
 #include "base/net/tools/LineReader.h"
 #include "base/net/tools/Storage.h"
 #include "base/tools/Object.h"
@@ -66,6 +69,8 @@ public:
         EXT_ALGO,
         EXT_NICEHASH,
         EXT_CONNECT,
+        EXT_NATIVE,
+        EXT_SUBMIT_RESULT,
         EXT_MAX
     };
 
@@ -77,6 +82,9 @@ public:
     void replyWithError(int64_t id, const char *message);
     void setJob(Job &job, int64_t extra_nonce = -1);
     void success(int64_t id, const char *status);
+    void setNativeAlgorithm(const Algorithm &algorithm);
+    void invalidateJobs() { m_job.reset(); m_prevJob.reset(); }
+
 
     inline bool hasExtension(Extension ext) const noexcept        { return m_extensions.test(ext); }
     inline const char *ip() const                                 { return m_ip; }
@@ -94,7 +102,7 @@ public:
     inline State state() const                                    { return m_state; }
     inline uint16_t localPort() const                             { return m_localPort; }
     inline uint64_t customDiff() const                            { return m_customDiff; }
-    inline uint64_t diff() const                                  { return (m_customDiff ? std::min(m_customDiff, m_diff) : m_diff); }
+    inline uint64_t diff() const                                  { return (m_job.isValid() ? assignedDiff(m_job) : (m_customDiff ? std::min(m_customDiff, m_diff) : m_diff)); }
     inline uint64_t expire() const                                { return m_expire; }
     inline uint64_t rx() const                                    { return m_rx; }
     inline uint64_t timestamp() const                             { return m_timestamp; }
@@ -123,6 +131,17 @@ private:
     bool parseRequest(int64_t id, const char *method, const rapidjson::Value &params);
     bool send(BIO *bio);
     void heartbeat();
+    bool dispatchRequest(const rapidjson::Value &message);
+    bool parseNativeRequest(int64_t id, const char *method, const rapidjson::Value &params, const rapidjson::Value &message);
+    bool submitJob(int64_t id, const rapidjson::Value &params, const rapidjson::Value *native = nullptr);
+    void rememberJob(const Job &job);
+    uint64_t assignedDiff(const Job &job) const;
+    String assignedPrefix(const Job &job) const;
+    void sendNative(const Job &job);
+    void sendSubscription();
+    void addReplyId(rapidjson::Document &doc, int64_t id);
+    void replyResult(int64_t id, const rapidjson::Value &result, const char *error = nullptr);
+
     void parse(char *line, size_t len);
     void read(ssize_t nread, const uv_buf_t *buf);
     void send(const rapidjson::Document &doc);
@@ -155,6 +174,12 @@ private:
     String m_rigId;
     String m_user;
     String m_signatureData;
+    Job m_job, m_prevJob;
+    std::map<int64_t, std::pair<String, bool>> m_requestIds;
+    int64_t m_requestSequence = 0;
+    int64_t m_subscribeId = 0;
+    bool m_nativeProtocol = false;
+
     uint8_t m_viewTag       = 0;
     Tls *m_tls              = nullptr;
     uint16_t m_localPort;

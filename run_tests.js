@@ -156,6 +156,12 @@ function findBinary(buildDir) {
     throw new Error(`xmrig-proxy binary not found under ${buildDir}`);
 }
 
+function findNativeTargetBinary(proxyBinary) {
+    const name = process.platform === "win32" ? "native-target-tests.exe" : "native-target-tests";
+    const file = path.join(path.dirname(proxyBinary), name);
+    return fs.existsSync(file) ? file : null;
+}
+
 function buildProxy(options) {
     if (options.binary) {
         if (!fs.existsSync(options.binary)) {
@@ -176,12 +182,19 @@ function buildProxy(options) {
     return findBinary(options.buildDir);
 }
 
-function runNodeTests(binary, options) {
+function runNodeTests(binary, nativeTargetBinary, options) {
     const env = Object.assign({}, process.env, {
         XMRIG_PROXY_TEST_BINARY: binary,
         XMRIG_PROXY_TEST_TIMEOUT_MS: String(options.timeoutMs),
         XMRIG_PROXY_TEST_VERBOSE: options.verbose ? "1" : "0"
     });
+
+    if (nativeTargetBinary) {
+        env.XMRIG_PROXY_NATIVE_TARGET_BINARY = nativeTargetBinary;
+    }
+    else {
+        delete env.XMRIG_PROXY_NATIVE_TARGET_BINARY;
+    }
 
     run(process.execPath, [
         "--test",
@@ -194,9 +207,20 @@ function runNodeTests(binary, options) {
 function main() {
     const options = parseArgs(process.argv.slice(2));
     const binary = buildProxy(options);
+    const nativeTargetBinary = findNativeTargetBinary(binary);
+
+    if (!nativeTargetBinary && options.build && !options.binary) {
+        throw new Error(`native-target-tests binary not found beside ${binary}`);
+    }
 
     console.log(`testing ${binary}`);
-    runNodeTests(binary, options);
+    if (nativeTargetBinary) {
+        console.log(`testing ${nativeTargetBinary}`);
+    }
+    else {
+        console.log("skipping native-target-tests: sibling binary not found (use --skip-build only when it is unavailable)");
+    }
+    runNodeTests(binary, nativeTargetBinary, options);
 }
 
 try {

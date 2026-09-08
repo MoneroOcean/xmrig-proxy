@@ -30,6 +30,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "3rdparty/rapidjson/fwd.h"
 #include "base/crypto/Algorithm.h"
 #include "base/tools/Buffer.h"
 #include "base/tools/String.h"
@@ -76,7 +77,14 @@ public:
     inline const String &poolWallet() const             { return m_poolWallet; }
     inline const uint32_t *nonce() const                { return reinterpret_cast<const uint32_t*>(m_blob + nonceOffset()); }
     inline const uint8_t *blob() const                  { return m_blob; }
-    inline size_t nonceSize() const                     { return (algorithm().family() == Algorithm::KAWPOW) ?  8 :  4; }
+    inline size_t nonceSize() const                     {
+#   ifdef XMRIG_PROXY_PROJECT
+        if (m_nativeNonceSize) {
+            return m_nativeNonceSize;
+        }
+#   endif
+        return (algorithm().family() == Algorithm::KAWPOW) ?  8 :  4;
+    }
     inline size_t size() const                          { return m_size; }
     inline uint32_t *nonce()                            { return reinterpret_cast<uint32_t*>(m_blob + nonceOffset()); }
     inline uint32_t backend() const                     { return m_backend; }
@@ -87,7 +95,19 @@ public:
     inline uint8_t *blob()                              { return m_blob; }
     inline uint8_t fixedByte() const                    { return *(m_blob + 42); }
     inline uint8_t index() const                        { return m_index; }
-    inline void reset()                                 { m_size = 0; m_diff = 0; }
+    inline void reset()                                 {
+        m_size = 0;
+        m_diff = 0;
+#   ifdef XMRIG_PROXY_PROJECT
+        m_nativePayload = nullptr;
+        m_nativeControl = nullptr;
+        m_nativeTarget = nullptr;
+        m_nativePrefix = nullptr;
+        m_nativeNonceOffset = 0;
+        m_nativeNonceSize = 0;
+        m_nativeTargetBigEndian = false;
+#   endif
+    }
     inline void setAlgorithm(const Algorithm::Id id)    { m_algorithm = id; }
     inline void setAlgorithm(const char *algo)          { m_algorithm = algo; }
     inline void setBackend(uint32_t backend)            { m_backend = backend; }
@@ -98,9 +118,26 @@ public:
     inline void setPoolWallet(const String &poolWallet) { m_poolWallet = poolWallet; }
 
 #   ifdef XMRIG_PROXY_PROJECT
+    bool setNativePayload(const rapidjson::Value &message);
+    void setNativePrefix(const char *prefix);
+    bool setNativeTarget(const char *target, bool bigEndian);
+    inline void setNativeNonce(size_t offset, size_t size) {
+        m_nativeNonceOffset = offset;
+        m_nativeNonceSize = size;
+    }
+    bool nativeHashMeetsDifficulty(const char *hash, uint64_t difficulty) const;
+    bool nativeHashMeetsTarget(const char *hash) const;
+
     inline char *rawBlob()                              { return m_rawBlob; }
     inline const char *rawBlob() const                  { return m_rawBlob; }
     inline const char *rawTarget() const                { return m_rawTarget; }
+    inline bool hasNativePayload() const                { return !m_nativePayload.isNull(); }
+    inline const String &nativePayload() const          { return m_nativePayload; }
+    inline const String &nativeControl() const          { return m_nativeControl; }
+    inline const String &nativePrefix() const            { return m_nativePrefix; }
+    inline const String &nativeTarget() const           { return m_nativeTarget; }
+    inline bool nativeTargetBigEndian() const           { return m_nativeTargetBigEndian; }
+    inline void setNativeControl(const char *payload)   { m_nativeControl = payload; }
     inline const String &rawSeedHash() const            { return m_rawSeedHash; }
     inline const String &rawSigKey() const              { return m_rawSigKey; }
 #   endif
@@ -165,6 +202,13 @@ private:
 #   ifdef XMRIG_PROXY_PROJECT
     char m_rawBlob[kMaxBlobSize * 2 + 8]{};
     char m_rawTarget[24]{};
+    String m_nativePayload;
+    String m_nativeControl;
+    String m_nativeTarget;
+    String m_nativePrefix;
+    size_t m_nativeNonceOffset = 0;
+    size_t m_nativeNonceSize = 0;
+    bool m_nativeTargetBigEndian = false;
     String m_rawSeedHash;
     String m_rawSigKey;
 

@@ -215,14 +215,15 @@ class FakePool {
 
     onMessage(connection, message) {
         if (message.method === "login") {
-            this.logins.push({ at: Date.now(), connection, message });
+            const job = this.nextJob();
+            this.logins.push({ at: Date.now(), connection, message, job });
             const respond = () => connection.peer.send({
                 id: message.id,
                 jsonrpc: "2.0",
                 error: null,
                 result: {
                     id: connection.rpcId,
-                    job: this.nextJob(),
+                    job,
                     extensions: ["algo", "keepalive"]
                 }
             });
@@ -238,7 +239,8 @@ class FakePool {
         }
 
         if (message.method === "getjob") {
-            this.getjobs.push({ at: Date.now(), connection, message });
+            const job = this.nextJob();
+            this.getjobs.push({ at: Date.now(), connection, message, job });
             const respond = () => {
                 if (this.options.getjobError) {
                     connection.peer.send({
@@ -256,7 +258,7 @@ class FakePool {
                         result: Object.assign({
                             id: connection.rpcId,
                             extensions: ["algo", "keepalive"]
-                        }, this.nextJob())
+                        }, job)
                     });
                 }
 
@@ -271,7 +273,6 @@ class FakePool {
             else {
                 respond();
             }
-
             return;
         }
 
@@ -516,7 +517,9 @@ async function stopProxy(child) {
 
 async function withProxy(testFn, options = {}) {
     const config = getTestConfig();
-    const pool = new FakePool(config.timeoutMs, options.poolOptions || {});
+    const pool = options.poolFactory
+        ? options.poolFactory(config.timeoutMs, options.poolOptions || {})
+        : new FakePool(config.timeoutMs, options.poolOptions || {});
     const miners = [];
     const proxyCwd = fs.mkdtempSync(path.join(os.tmpdir(), "xmrig-proxy-test-"));
     let proxy = null;

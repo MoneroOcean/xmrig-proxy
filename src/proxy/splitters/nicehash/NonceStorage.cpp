@@ -42,14 +42,42 @@ xmrig::NonceStorage::NonceStorage() :
 xmrig::NonceStorage::~NonceStorage() = default;
 
 
+void xmrig::NonceStorage::setActive(bool active)
+{
+    if (m_active && !active) {
+        for (const auto &entry : m_miners) {
+            if (entry.second) {
+                entry.second->invalidateJobs();
+            }
+        }
+    }
+
+    m_active = active;
+}
+
+
 bool xmrig::NonceStorage::add(Miner *miner)
 {
-    const int index = nextIndex(0);
+    if (!miner) {
+        return false;
+    }
+
+    int index = -1;
+    for (size_t i = 0; i < m_used.size(); ++i) {
+        if (m_used[i] == miner->id() && m_miners.count(miner->id()) && m_miners.at(miner->id()) == miner) {
+            index = static_cast<int>(i);
+            break;
+        }
+    }
+
+    if (index < 0) {
+        index = nextIndex(0);
+    }
     if (index == -1) {
         return false;
     }
 
-    miner->setFixedByte(index);
+    miner->setFixedByte(static_cast<uint8_t>(index));
 
     m_index = index;
     m_used[index] = miner->id();
@@ -90,6 +118,20 @@ bool xmrig::NonceStorage::isValidJobId(const String &id) const
 }
 
 
+const xmrig::Job *xmrig::NonceStorage::findJob(const String &id) const
+{
+    if (m_job.id() == id) {
+        return &m_job;
+    }
+
+    if (m_prevJob.isValid() && m_prevJob.id() == id) {
+        return &m_prevJob;
+    }
+
+    return nullptr;
+}
+
+
 xmrig::Miner *xmrig::NonceStorage::miner(int64_t id)
 {
     if (m_miners.count(id) == 0) {
@@ -102,7 +144,14 @@ xmrig::Miner *xmrig::NonceStorage::miner(int64_t id)
 
 void xmrig::NonceStorage::remove(const Miner *miner)
 {
-    m_used[miner->fixedByte()] = -miner->id();
+    if (!miner) {
+        return;
+    }
+
+    const uint8_t fixedByte = miner->fixedByte();
+    if (fixedByte < m_used.size() && m_used[fixedByte] == miner->id()) {
+        m_used[fixedByte] = -miner->id();
+    }
 
     auto it = m_miners.find(miner->id());
     if (it != m_miners.end()) {
@@ -120,15 +169,20 @@ void xmrig::NonceStorage::reset()
 void xmrig::NonceStorage::setJob(const Job &job)
 {
     for (size_t i = 0; i < 256; ++i) {
-        if (m_used[i] < 0) {
+        if (m_used[i] < 0 && (m_job.id() != job.id() || m_job.clientId() != job.clientId())) {
             m_used[i] = 0;
         }
     }
 
-    if (m_job.clientId() == job.clientId()) {
-        m_prevJob = m_job;
+    if (m_job.id() != job.id()) {
+        if (m_job.clientId() == job.clientId()) {
+            m_prevJob = m_job;
+        }
+        else {
+            m_prevJob.reset();
+        }
     }
-    else {
+    else if (m_job.clientId() != job.clientId()) {
         m_prevJob.reset();
     }
 

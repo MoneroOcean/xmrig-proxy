@@ -91,6 +91,13 @@ public:
         AR2_CHUKWA      = 0x61130000,   // "argon2/chukwa"    Argon2id (Chukwa).
         AR2_CHUKWA_V2   = 0x61140000,   // "argon2/chukwav2"  Argon2id (Chukwa v2).
         AR2_WRKZ        = 0x61120000,   // "argon2/wrkz"      Argon2id (WRKZ)
+        /* MoneroOcean native pool algorithms are represented for routing only; the proxy never
+           runs their proof of work. Keep their ids outside the local backend families. */
+        ASTROBWT_V2     = 0x62020000,   // "astrobwt/v2"
+        AUTOLYKOS2      = 0x65000000,   // "autolykos2"
+        ETHASH          = 0x66000000,   // "ethash"
+        ETCHASH         = 0x66000001,   // "etchash"
+        C29             = 0x67000000,   // "c29" / "cuckaroo"
         KAWPOW_RVN      = 0x6b0f0000,   // "kawpow/rvn"       KawPow (RVN)
         /* MoneroOcean change: begin Panthera is the RandomX-family name MoneroOcean forwards for Scala jobs. */
         RX_XLA          = 0x721211ff,   // "panthera"         Panthera (Scala2).
@@ -176,10 +183,14 @@ public:
     static const char *kAR2_WRKZ;
 #   endif
 
-#   ifdef XMRIG_ALGO_KAWPOW
     static const char *kKAWPOW;
     static const char *kKAWPOW_RVN;
-#   endif
+
+    static const char *kASTROBWT_V2;
+    static const char *kAUTOLYKOS2;
+    static const char *kETHASH;
+    static const char *kETCHASH;
+    static const char *kC29;
 
 #   ifdef XMRIG_ALGO_GHOSTRIDER
     static const char* kGHOSTRIDER;
@@ -205,6 +216,10 @@ public:
     inline bool isCN() const                                { return isCN(m_id); }
     inline bool isEqual(const Algorithm &other) const       { return m_id == other.m_id; }
     inline bool isValid() const                             { return m_id != INVALID && family() > UNKNOWN; }
+    static inline constexpr bool isNativeOnly(Id id)
+    {
+        return id == ASTROBWT_V2 || id == AUTOLYKOS2 || id == ETHASH || id == ETCHASH || id == C29 || id == KAWPOW_RVN;
+    }
     inline Id base() const                                  { return base(m_id); }
     inline Id id() const                                    { return m_id; }
     inline size_t l2() const                                { return l2(m_id); }

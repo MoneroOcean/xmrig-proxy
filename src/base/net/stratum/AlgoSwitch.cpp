@@ -60,6 +60,14 @@ static bool appendDefault(Algorithms &algos, algo_perfs &perfs, Algorithm::Id id
 }
 
 
+static const char *serializedAlgoName(const Algorithm &algorithm)
+{
+    /* MoneroOcean's pool API names the RVN KawPow profile kawpow1. Keep the
+       local alias set broad, while emitting that stable upstream spelling. */
+    return algorithm == Algorithm::KAWPOW_RVN ? "kawpow1" : algorithm.name();
+}
+
+
 AlgoSwitch::AlgoSwitch()
 {
     setDefaultAlgo(Algorithm(Algorithm::RX_0));
@@ -151,7 +159,7 @@ rapidjson::Value AlgoSwitch::algosToJSON(rapidjson::Document &doc) const
     rapidjson::Value algos(rapidjson::kArrayType);
 
     for (const auto &algo : m_algos.empty() ? m_defaultAlgos : m_algos) {
-        algos.PushBack(algo.toJSON(), allocator);
+        algos.PushBack(rapidjson::StringRef(serializedAlgoName(algo)), allocator);
     }
 
     return algos;
@@ -164,7 +172,7 @@ rapidjson::Value AlgoSwitch::algoPerfsToJSON(rapidjson::Document &doc) const
     rapidjson::Value perfs(rapidjson::kObjectType);
 
     for (const auto &algoPerf : m_algoPerfs.empty() ? m_defaultAlgoPerfs : m_algoPerfs) {
-        perfs.AddMember(rapidjson::StringRef(Algorithm(algoPerf.first).name()), algoPerf.second, allocator);
+        perfs.AddMember(rapidjson::StringRef(serializedAlgoName(Algorithm(algoPerf.first))), algoPerf.second, allocator);
     }
 
     return perfs;

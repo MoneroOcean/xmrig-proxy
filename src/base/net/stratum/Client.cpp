@@ -22,6 +22,7 @@
 #include <iterator>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <utility>
 #include <sstream>
 
@@ -51,6 +52,7 @@
 #include "base/tools/cryptonote/BlobReader.h"
 #include "base/tools/Cvt.h"
 #include "net/JobResult.h"
+#include "proxy/Miner.h"
 
 
 #ifdef _MSC_VER
@@ -79,7 +81,6 @@ static const char *states[] = {
     "reconnecting"
 };
 #endif
-
 
 xmrig::Client::Client(int id, const char *agent, IClientListener *listener) :
     BaseClient(id, listener),
@@ -202,6 +203,10 @@ int64_t xmrig::Client::submit(const JobResult &result)
         return -1;
     }
 
+    if (!result.nativePayload.isNull() && !result.nativePayload.isEmpty()) {
+        return submitNative(result);
+    }
+
     using namespace rapidjson;
 
 #   ifdef XMRIG_PROXY_PROJECT
@@ -265,6 +270,7 @@ int64_t xmrig::Client::submit(const JobResult &result)
 #   else
     m_results[m_sequence] = SubmitResult(m_sequence, result.diff, result.actualDiff(), 0, result.backend);
 #   endif
+    m_results[m_sequence].assignedDiff = result.assignedDiff;
 
     return send(doc);
 }
@@ -352,6 +358,10 @@ bool xmrig::Client::tryMiner(const Miner *miner, int upstreamCount) const
 void xmrig::Client::addMiner(const Miner *miner)
 {
     AlgoSwitch::addMiner(miner);
+    if (miner && miner->hasExtension(Miner::EXT_NATIVE)) {
+        m_nativeRequested = true;
+        subscribeNative();
+    }
     getjob();
 }
 
@@ -373,6 +383,14 @@ void xmrig::Client::setPool(const Pool &pool)
 {
     BaseClient::setPool(pool);
     AlgoSwitch::setDefaultAlgo(pool.algorithm());
+
+    m_nativeControl   = nullptr;
+    m_nativeControlAlgo = nullptr;
+    m_nativePrefix    = nullptr;
+    m_nativeTarget    = nullptr;
+    m_nativeNonceSize = 0;
+    m_nativeSubscribed = false;
+    m_nativePrefixUpdated = false;
 }
 /* MoneroOcean change: end */
 
@@ -430,7 +448,7 @@ bool xmrig::Client::close()
 }
 
 
-bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code)
+bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code, const rapidjson::Value *payload)
 {
     if (!params.IsObject()) {
         *code = 2;
@@ -457,6 +475,20 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code)
         job.setAlgorithm(m_pool.coin().algorithm(blobVersion));
     }
 
+#   ifdef XMRIG_PROXY_PROJECT
+    if (!m_nativePrefix.isNull()) {
+        job.setNativePrefix(m_nativePrefix.data());
+    }
+
+    if (m_nativeRequested && job.algorithm() == Algorithm::C29 && params.HasMember("noncebytes")) {
+        const uint64_t nonceBytes = Json::getUint64(params, "noncebytes");
+        const uint64_t nonceOffset = Json::getUint64(params, "nonceoffset");
+        if (nonceBytes > 0 && nonceBytes <= 8 && nonceOffset <= Job::kMaxBlobSize - nonceBytes) {
+            job.setNativeNonce(static_cast<size_t>(nonceOffset), static_cast<size_t>(nonceBytes));
+        }
+    }
+#   endif
+
 #   ifdef XMRIG_FEATURE_HTTP
     if (m_pool.mode() == Pool::MODE_SELF_SELECT) {
         job.setExtraNonce(Json::getString(params, "extra_nonce"));
@@ -471,14 +503,38 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code)
 #   endif
     {
         if (!job.setBlob(blobData)) {
-            *code = 4;
-            return false;
+            if (!m_nativeRequested || job.algorithm() != Algorithm::C29) {
+                *code = 4;
+                return false;
+            }
+
+            const char *prePow = Json::getString(params, "pre_pow");
+            std::string synthetic;
+            if (!prePow && job.algorithm() == Algorithm::C29) {
+                synthetic.assign((job.nonceOffset() + job.nonceSize()) * 2, '0');
+                prePow = synthetic.c_str();
+            }
+
+            if (!job.setBlob(prePow)) {
+                *code = 4;
+                return false;
+            }
         }
     }
 
     if (!job.setTarget(Json::getString(params, "target"))) {
-        *code = 5;
-        return false;
+        if (!m_nativeRequested || job.algorithm() != Algorithm::C29) {
+            *code = 5;
+            return false;
+        }
+
+        const uint64_t difficulty = Json::getUint64(params, "difficulty");
+        if (difficulty == 0) {
+            *code = 5;
+            return false;
+        }
+
+        job.setDiff(difficulty);
     }
 
     job.setHeight(Json::getUint64(params, "height"));
@@ -495,12 +551,36 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code)
 
     job.setSigKey(Json::getString(params, "sig_key"));
 
+#   ifdef XMRIG_PROXY_PROJECT
+    if (!payload) {
+        payload = m_currentMessage;
+    }
+    if (payload && payload->IsObject() && payload->HasMember("method")) {
+        job.setNativePayload(*payload);
+    }
+    else if (Algorithm::isNativeOnly(job.algorithm().id())) {
+        rapidjson::Document nativePayload(rapidjson::kObjectType);
+        auto &allocator = nativePayload.GetAllocator();
+        nativePayload.AddMember("method", rapidjson::Value("job", allocator), allocator);
+        rapidjson::Value nativeParams(rapidjson::kObjectType);
+        nativeParams.CopyFrom(params, allocator);
+        nativePayload.AddMember("params", nativeParams, allocator);
+        job.setNativePayload(nativePayload);
+    }
+#   endif
+
     m_job.setClientId(m_rpcId);
 
     if (m_job != job) {
+        m_nativePrefixUpdated = false;
         m_jobs++;
         m_job = std::move(job);
         return true;
+    }
+
+    if (m_nativePrefixUpdated) {
+        m_nativePrefixUpdated = false;
+        return false;
     }
 
     if (m_jobs == 0) { // https://github.com/xmrig/xmrig/issues/459
@@ -685,8 +765,16 @@ bool xmrig::Client::parseLogin(const rapidjson::Value &result, int *code)
     }
 
     parseExtensions(result);
+    setNativeMetadata(result, false);
 
-    const bool rc = parseJob(Json::getObject(result, "job"), code);
+    const rapidjson::Value &job = Json::getObject(result, "job");
+    bool rc = true;
+    if (job.IsObject()) {
+        rc = parseJob(job, code);
+    }
+    else if (result.HasMember("job_id")) {
+        rc = parseJob(result, code);
+    }
     m_jobs = 0;
 
     return rc;
@@ -703,8 +791,18 @@ bool xmrig::Client::parseGetjob(const rapidjson::Value &result, int *code)
     }
 
     parseExtensions(result);
+    setNativeMetadata(result, true);
 
-    return parseJob(result, code);
+    const rapidjson::Value &job = Json::getObject(result, "job");
+    if (job.IsObject()) {
+        return parseJob(job, code);
+    }
+
+    if (result.HasMember("job_id")) {
+        return parseJob(result, code);
+    }
+
+    return true;
 }
 /* MoneroOcean change: end */
 
@@ -751,6 +849,10 @@ void xmrig::Client::login()
     /* MoneroOcean change: begin Advertise normalized miner algo/algo-perf capabilities so MoneroOcean can choose compatible work. */
     params.AddMember("algo", AlgoSwitch::algosToJSON(doc), allocator);
     params.AddMember("algo-perf", AlgoSwitch::algoPerfsToJSON(doc), allocator);
+    Value extensions(kArrayType);
+    extensions.PushBack("mo-native", allocator);
+    extensions.PushBack("submit-result", allocator);
+    params.AddMember("extensions", extensions, allocator);
     /* MoneroOcean change: end */
 
     if (!m_rigId.isNull()) {
@@ -820,7 +922,6 @@ void xmrig::Client::sendGetjob()
 }
 /* MoneroOcean change: end */
 
-
 void xmrig::Client::onClose()
 {
     delete m_socket;
@@ -834,6 +935,18 @@ void xmrig::Client::onClose()
         m_tls = nullptr;
     }
 #   endif
+
+    m_nativeSubscribed = false;
+    m_nativePrefix = nullptr;
+    m_nativeControl = nullptr;
+    m_nativeControlAlgo = nullptr;
+    m_nativeTarget = nullptr;
+    m_nativeNonceSize = 0;
+    m_nativePrefixUpdated = false;
+    m_currentMessage = nullptr;
+    m_job.reset();
+    m_jobs = 0;
+    m_rpcId = nullptr;
 
     reconnect();
 }
@@ -863,6 +976,8 @@ void xmrig::Client::parse(char *line, size_t len)
     if (!doc.IsObject()) {
         return;
     }
+
+    m_currentMessage = &doc;
 
     const auto &id    = Json::getValue(doc, "id");
     const auto &error = Json::getValue(doc, "error");
@@ -902,6 +1017,49 @@ void xmrig::Client::parse(char *line, size_t len)
         LOG_WARN("%s " YELLOW("client.reconnect to %s"), tag(), s.str().c_str());
         setPoolUrl(s.str().c_str());
         return reconnect();
+    }
+
+    if (m_nativeRequested && method && strcmp(method, "mining.set_target") == 0) {
+        parseNativeControl(doc);
+        return;
+    }
+
+    if (m_nativeRequested && method && strcmp(method, "mining.set_difficulty") == 0) {
+        parseNativeControl(doc);
+        return;
+    }
+
+    if (m_nativeRequested && method && strcmp(method, "mining.set_extranonce") == 0) {
+        parseNativeControl(doc);
+        return;
+    }
+
+    if (m_nativeRequested && method && strcmp(method, "mining.notify") == 0) {
+        if (parseNativeNotify(doc)) {
+            m_listener->onJobReceived(this, m_job, doc);
+        }
+        else {
+            close();
+        }
+
+        return;
+    }
+
+    if (method && strcmp(method, "job") == 0 && m_nativeRequested) {
+        const auto &params = Json::getValue(doc, "params");
+        const bool nativeObject = params.IsObject() &&
+                                  (params.HasMember("noncebytes") || params.HasMember("pre_pow") ||
+                                   params.HasMember("proof") || params.HasMember("edges"));
+        if (nativeObject) {
+            if (parseNativeObjectJob(doc)) {
+                m_listener->onJobReceived(this, m_job, doc);
+            }
+            else {
+                close();
+            }
+
+            return;
+        }
     }
 
     if (id.IsInt64()) {
@@ -1016,30 +1174,47 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         return;
     }
 
-    if (!result.IsObject()) {
+    if (id != 1 && !result.IsObject()) {
+        if (!result.IsBool()) {
+            handleSubmitResponse(id, "invalid response");
+        }
+        else if (result.GetBool()) {
+            handleSubmitResponse(id);
+        }
+        else {
+            handleSubmitResponse(id, "pool rejected share");
+        }
+
         return;
     }
 
     if (id == 1) {
+        if (!result.IsObject()) {
+            return;
+        }
+
         int code = -1;
-        /* MoneroOcean change: begin A getjob response also uses id 1, and should update the current job without replaying login success. */
         if (m_getjobInFlight) {
             m_getjobInFlight = false;
             if (parseGetjob(result, &code)) {
-                m_listener->onJobReceived(this, m_job, result);
+                const rapidjson::Value &job = Json::getObject(result, "job");
+                if (m_job.isValid() && (job.IsObject() || result.HasMember("job_id"))) {
+                    m_listener->onJobReceived(this, m_job, job.IsObject() ? job : result);
+                }
             }
-            else if (!isQuiet()) {
-                LOG_ERR("%s " RED("getjob error code: ") RED_BOLD("%d"), tag(), code);
+            else if (code != -1) {
+                if (!isQuiet()) {
+                    LOG_ERR("%s " RED("getjob error code: ") RED_BOLD("%d"), tag(), code);
+                }
                 close();
             }
 
             if (m_getjobDirty) {
                 sendGetjob();
             }
-
             return;
         }
-        /* MoneroOcean change: end */
+
         m_loginInFlight = false;
         if (!parseLogin(result, &code)) {
             if (!isQuiet()) {
@@ -1057,8 +1232,11 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         m_getjobInFlight = false;
         m_listener->onLoginSuccess(this);
 
+        subscribeNative();
+
         if (m_job.isValid()) {
-            m_listener->onJobReceived(this, m_job, Json::getObject(result, "job"));
+            const rapidjson::Value &job = Json::getObject(result, "job");
+            m_listener->onJobReceived(this, m_job, job.IsObject() ? job : result);
         }
 
         return;

@@ -46,7 +46,14 @@ xmrig::Job::Job(bool nicehash, const Algorithm &algorithm, const String &clientI
 
 bool xmrig::Job::isEqual(const Job &other) const
 {
-    return m_id == other.m_id && m_clientId == other.m_clientId && isEqualBlob(other) && m_target == other.m_target;
+    return m_id == other.m_id && m_clientId == other.m_clientId && isEqualBlob(other) && m_target == other.m_target
+#   ifdef XMRIG_PROXY_PROJECT
+        && m_nativePayload == other.m_nativePayload && m_nativeControl == other.m_nativeControl
+        && m_nativeTarget == other.m_nativeTarget && m_nativePrefix == other.m_nativePrefix
+        && m_nativeNonceOffset == other.m_nativeNonceOffset
+        && m_nativeNonceSize == other.m_nativeNonceSize && m_nativeTargetBigEndian == other.m_nativeTargetBigEndian
+#   endif
+        ;
 }
 
 
@@ -154,6 +161,12 @@ bool xmrig::Job::setTarget(const char *target)
 
 size_t xmrig::Job::nonceOffset() const
 {
+#   ifdef XMRIG_PROXY_PROJECT
+    if (m_nativeNonceSize) {
+        return m_nativeNonceOffset;
+    }
+#   endif
+
     switch (algorithm().family()) {
     case Algorithm::KAWPOW:
         return 32;
@@ -249,6 +262,13 @@ void xmrig::Job::copy(const Job &other)
 #   ifdef XMRIG_PROXY_PROJECT
     m_rawSeedHash = other.m_rawSeedHash;
     m_rawSigKey   = other.m_rawSigKey;
+    m_nativePayload = other.m_nativePayload;
+    m_nativeControl = other.m_nativeControl;
+    m_nativeTarget = other.m_nativeTarget;
+    m_nativePrefix = other.m_nativePrefix;
+    m_nativeNonceOffset = other.m_nativeNonceOffset;
+    m_nativeNonceSize = other.m_nativeNonceSize;
+    m_nativeTargetBigEndian = other.m_nativeTargetBigEndian;
 
     memcpy(m_rawBlob, other.m_rawBlob, sizeof(m_rawBlob));
     memcpy(m_rawTarget, other.m_rawTarget, sizeof(m_rawTarget));
@@ -305,6 +325,13 @@ void xmrig::Job::move(Job &&other)
 #   ifdef XMRIG_PROXY_PROJECT
     m_rawSeedHash = std::move(other.m_rawSeedHash);
     m_rawSigKey   = std::move(other.m_rawSigKey);
+    m_nativePayload = std::move(other.m_nativePayload);
+    m_nativeControl = std::move(other.m_nativeControl);
+    m_nativeTarget = std::move(other.m_nativeTarget);
+    m_nativePrefix = std::move(other.m_nativePrefix);
+    m_nativeNonceOffset = other.m_nativeNonceOffset;
+    m_nativeNonceSize = other.m_nativeNonceSize;
+    m_nativeTargetBigEndian = other.m_nativeTargetBigEndian;
 
     memcpy(m_rawBlob, other.m_rawBlob, sizeof(m_rawBlob));
     memcpy(m_rawTarget, other.m_rawTarget, sizeof(m_rawTarget));

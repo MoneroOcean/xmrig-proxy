@@ -74,6 +74,7 @@ public:
 
     bool add(Miner *miner);
     bool isActive() const;
+    void refresh(Miner *miner);
     /* MoneroOcean change: begin Delegate MoneroOcean grouping decisions through normal Client wrappers without changing IClient. */
     bool tryMiner(const Miner *miner, int upstreamCount) const;
     void setAlgoPerfSameThreshold(uint64_t percent);
@@ -110,6 +111,8 @@ private:
     void setJob(const char *host, int port, const Job &job);
     void suspend();
 
+    bool hasNativeC29(const Miner *miner) const;
+
     Controller *m_controller;
     DonateStrategy *m_donate    = nullptr;
     int m_suspended             = 0;
@@ -117,6 +120,7 @@ private:
     IStrategy *m_strategy;
     NonceStorage *m_storage;
     size_t m_id;
+    bool m_nativeC29 = false;
     std::map<int64_t, SubmitCtx> m_results;
 };
 

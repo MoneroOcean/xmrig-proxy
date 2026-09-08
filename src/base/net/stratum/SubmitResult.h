@@ -54,6 +54,7 @@ public:
     uint64_t actualDiff     = 0;
     uint64_t diff           = 0;
     uint64_t elapsed        = 0;
+    uint64_t assignedDiff   = 0;
 
 private:
     uint64_t m_start        = 0;

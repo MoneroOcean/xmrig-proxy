@@ -39,6 +39,7 @@ public:
         ConnectionType,
         CloseType,
         LoginType,
+        SubscribeType,
         SubmitType,
         AcceptType
     };

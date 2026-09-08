@@ -54,6 +54,10 @@ public:
     const int64_t id          = 0;
     const int64_t extra_nonce = -1;
     String jobId;
+    String nativePayload;
+    uint64_t assignedDiff = 0;
+    bool nativeArray = false;
+    void setActualDiff(uint64_t value) { m_actualDiff = value; }
     uint64_t diff             = 0;
 
 private:

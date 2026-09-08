@@ -85,20 +85,50 @@ xmrig::NonceMapper::~NonceMapper()
 
 bool xmrig::NonceMapper::add(Miner *miner)
 {
+    if (!miner) {
+        return false;
+    }
+
+    const bool alreadyMapped = miner->mapperId() == static_cast<ssize_t>(m_id)
+                            && m_storage->miner(miner->id()) == miner;
+    if (!alreadyMapped && miner->mapperId() >= 0) {
+        return false;
+    }
+
+    const bool candidateC29 = hasNativeC29(miner);
+    if (!alreadyMapped && (m_nativeC29 || (candidateC29 && m_storage->isUsed()))) {
+        return false;
+    }
+
+    if (alreadyMapped) {
+        if (candidateC29) {
+            m_nativeC29 = true;
+        }
+
+        return true;
+    }
+
     if (!miner->hasExtension(Miner::EXT_NICEHASH)) {
         miner->setExtension(Miner::EXT_ALGO,     m_controller->config()->hasAlgoExt());
         miner->setExtension(Miner::EXT_NICEHASH, true);
     }
 
+    const ssize_t previousMapper = miner->mapperId();
+    miner->setMapperId(static_cast<ssize_t>(m_id));
+
     if (!m_storage->add(miner)) {
+        miner->setMapperId(previousMapper);
         return false;
+    }
+
+    if (candidateC29) {
+        m_nativeC29 = true;
     }
 
     if (isSuspended()) {
         connect();
     }
 
-    miner->setMapperId(static_cast<ssize_t>(m_id));
     /* MoneroOcean change: begin Add miner capabilities to normal upstream clients and refresh MoneroOcean work with getjob. */
     if (Client *upstream = client()) {
         upstream->addMiner(miner);
@@ -114,6 +144,18 @@ bool xmrig::NonceMapper::add(Miner *miner)
 /* MoneroOcean change: begin Ask normal upstream clients whether this miner can share their current MoneroOcean algo/perf group. */
 bool xmrig::NonceMapper::tryMiner(const Miner *miner, int upstreamCount) const
 {
+    if (!miner) {
+        return false;
+    }
+
+    const bool alreadyMapped = miner->mapperId() == static_cast<ssize_t>(m_id);
+    if (!alreadyMapped) {
+        const bool candidateC29 = hasNativeC29(miner);
+        if (m_nativeC29 || (candidateC29 && m_storage->isUsed())) {
+            return false;
+        }
+    }
+
     Client *upstream = client();
 
     return upstream == nullptr || upstream->tryMiner(miner, upstreamCount);
@@ -135,6 +177,19 @@ void xmrig::NonceMapper::setAlgoPerfSameThreshold(uint64_t percent)
     }
 }
 /* MoneroOcean change: end */
+
+
+void xmrig::NonceMapper::refresh(Miner *miner)
+{
+    if (!miner || miner->mapperId() != static_cast<ssize_t>(m_id) || m_storage->miner(miner->id()) != miner) {
+        return;
+    }
+
+    if (m_storage->isActive() && m_storage->job().isValid()) {
+        Job job = m_storage->job();
+        miner->setJob(job);
+    }
+}
 
 
 bool xmrig::NonceMapper::isActive() const
@@ -170,6 +225,9 @@ void xmrig::NonceMapper::reload(const Pools &pools)
 void xmrig::NonceMapper::remove(const Miner *miner)
 {
     m_storage->remove(miner);
+    if (!m_storage->isUsed()) {
+        m_nativeC29 = false;
+    }
     /* MoneroOcean change: begin Remove miner capabilities so upstream getjob reflects the remaining MoneroOcean group. */
     if (Client *upstream = client()) {
         upstream->removeMiner(miner);
@@ -197,16 +255,37 @@ void xmrig::NonceMapper::submit(SubmitEvent *event)
         return event->setError(Error::InvalidJobId);
     }
 
-    if (event->request.algorithm.isValid() && event->request.algorithm != m_storage->job().algorithm()) {
+    const Job *job = m_storage->findJob(event->request.jobId);
+    if (!job) {
+        return event->setError(Error::InvalidJobId);
+    }
+
+    if (event->request.algorithm.isValid() && event->request.algorithm != job->algorithm()) {
         return event->setError(Error::IncorrectAlgorithm);
     }
 
     JobResult req = event->request;
-    req.diff = m_storage->job().diff();
+    req.diff = job->diff();
 
     IStrategy *strategy = m_donate && m_donate->isActive() ? m_donate : m_strategy;
 
-    m_results[strategy->submit(req)] = SubmitCtx(req.id, event->miner()->id());
+    if (!strategy) {
+        return event->setError(Error::BadGateway);
+    }
+
+    IClient *upstream = strategy->client();
+    if (!upstream) {
+        return event->setError(Error::BadGateway);
+    }
+
+    const String &upstreamId = upstream->job().clientId();
+    if (!job->clientId().isNull() && (upstreamId.isNull() || job->clientId() != upstreamId)) {
+        return event->setError(Error::InvalidJobId);
+    }
+
+    const int64_t sequence = strategy->submit(req);
+    if (sequence < 0) return event->setError(Error::BadGateway);
+    m_results[sequence] = SubmitCtx(req.id, event->miner()->id());
 }
 
 
@@ -381,9 +460,26 @@ void xmrig::NonceMapper::suspend()
     m_suspended = 1;
     m_storage->setActive(false);
     m_storage->reset();
+    m_nativeC29 = false;
     m_strategy->stop();
 
     if (m_donate) {
         m_donate->stop();
     }
+}
+
+
+bool xmrig::NonceMapper::hasNativeC29(const Miner *miner) const
+{
+    if (!miner || !miner->hasExtension(Miner::EXT_NATIVE)) {
+        return false;
+    }
+
+    for (const Algorithm &algorithm : miner->get_algos()) {
+        if (algorithm == Algorithm::C29) {
+            return true;
+        }
+    }
+
+    return false;
 }

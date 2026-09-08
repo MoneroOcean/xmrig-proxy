@@ -127,7 +127,9 @@ set(SOURCES_BASE
 # MoneroOcean change: end
     src/base/net/stratum/BaseClient.cpp
     src/base/net/stratum/Client.cpp
+    src/base/net/stratum/ClientNative.cpp
     src/base/net/stratum/Job.cpp
+    src/base/net/stratum/JobNative.cpp
     src/base/net/stratum/NetworkState.cpp
     src/base/net/stratum/Pool.cpp
     src/base/net/stratum/Pools.cpp

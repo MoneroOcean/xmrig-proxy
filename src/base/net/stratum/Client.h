@@ -124,8 +124,16 @@ private:
     class Socks5;
     class Tls;
 
-    bool parseJob(const rapidjson::Value &params, int *code);
+    bool parseJob(const rapidjson::Value &params, int *code, const rapidjson::Value *payload = nullptr);
+    bool parseNativeNotify(const rapidjson::Value &message);
+    bool parseNativeObjectJob(const rapidjson::Value &message);
+    int64_t submitNative(const JobResult &result);
+    void parseNativeControl(const rapidjson::Value &message);
+    void parseNativeSubscribe(const rapidjson::Value &result);
+    void setNativeMetadata(const rapidjson::Value &result, bool notifyCurrentJob = false);
+    bool setNativePrefix(const char *prefix, uint32_t remainingBytes, const rapidjson::Value *message = nullptr);
     bool send(BIO *bio);
+    void subscribeNative();
     bool verifyAlgorithm(const Algorithm &algorithm, const char *algo) const;
     bool write(const uv_buf_t &buf);
     int resolve(const String &host);
@@ -161,6 +169,15 @@ private:
     std::shared_ptr<DnsRequest> m_dns;
     std::vector<char> m_sendBuf;
     std::vector<char> m_tempBuf;
+    String m_nativeControl;
+    String m_nativeControlAlgo;
+    String m_nativePrefix;
+    String m_nativeTarget;
+    uint32_t m_nativeNonceSize        = 0;
+    bool m_nativeRequested            = false;
+    bool m_nativeSubscribed           = false;
+    bool m_nativePrefixUpdated        = false;
+    const rapidjson::Value *m_currentMessage = nullptr;
     String m_rpcId;
     Tls *m_tls                  = nullptr;
     uint64_t m_expire           = 0;
