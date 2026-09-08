@@ -13,7 +13,6 @@ const {
 
 const UNSUPPORTED_ALGO_ERROR = "algo array must include at least one supported pool algo: no matching work";
 const TEMPLATE_WAIT_ERROR = "No block template yet. Please wait.";
-const GC_IDLE_TIMEOUT_MS = 70000;
 const RESTRICTIVE_CAPABILITIES = {
     algos: ["rx/0"],
     perfs: { "rx/0": 1000 }
@@ -409,35 +408,6 @@ test.describe("upstream request pacing and reconnect recovery", { concurrency: f
             assert.match(secondPause, /last_error="end of file"/);
         }, {
             poolFactory: timeout => new TemplateEofPool(timeout, { errorDelayMs: 250 })
-        });
-    });
-
-    test("logs an empty nonprimary group idle transition once during GC", async () => {
-        await withProxy(async ({ addMiner, config, pool, proxy }) => {
-            await addMiner("miner-primary", CAPABILITIES.base);
-            await pool.waitForGetjobs(1);
-
-            const emptyMiner = await addMiner("miner-empty-group", {
-                algos: ["cn/half"],
-                perfs: { "cn/half": 2 }
-            });
-            await pool.waitForLogins(2);
-            emptyMiner.close();
-
-            const idleLine = await waitForLogLine(
-                proxy,
-                { timeoutMs: Math.max(config.timeoutMs, GC_IDLE_TIMEOUT_MS) },
-                line => line.includes("miners=0 idle: last miner disconnected; closing upstream"),
-                "empty group idle transition"
-            );
-            assert.match(idleLine, /group=\d{4} miners=0 idle/);
-
-            await delay(1200);
-            assert.equal(
-                outputLines(proxy).filter(line => line.includes("miners=0 idle: last miner disconnected; closing upstream")).length,
-                1,
-                "empty group idle transition must be logged once"
-            );
         });
     });
 });

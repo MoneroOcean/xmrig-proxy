@@ -458,10 +458,6 @@ void xmrig::NonceMapper::setJob(const char *host, int port, const Job &job)
 
 void xmrig::NonceMapper::suspend()
 {
-    if (m_id != 0 && m_storage->size() == 0) {
-        LOG_INFO("%s group=%04zu miners=0 idle: last miner disconnected; closing upstream", Tags::network(), m_id);
-    }
-
     m_suspended = 1;
     m_storage->setActive(false);
     m_storage->reset();
