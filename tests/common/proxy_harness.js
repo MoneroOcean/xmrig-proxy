@@ -590,9 +590,10 @@ function assertPerfValues(request, expected, label) {
 function assertAlgoPayload(request, algos, perfs, label) {
     assertHasAlgoPayload(request, label);
     assertSetEqual(request.params.algo, algos, `${label}: algo set`);
-    assertSetEqual(Object.keys(request.params["algo-perf"]), algos, `${label}: algo-perf keys`);
+    const expectedPerfAlgos = perfs === undefined ? algos : Object.keys(perfs);
+    assertSetEqual(Object.keys(request.params["algo-perf"]), expectedPerfAlgos, `${label}: algo-perf keys`);
 
-    if (perfs) {
+    if (perfs !== undefined) {
         assertPerfValues(request, perfs, `${label}: algo-perf values`);
     }
 }

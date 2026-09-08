@@ -202,31 +202,35 @@ bool xmrig::Miner::isWritable() const
 }
 
 
-/* MoneroOcean change: begin Normalize miner algo/algo-perf data so each advertised algorithm has a matching performance entry and vice versa. */
+/* MoneroOcean change: begin Normalize miner algo/algo-perf data while preserving missing measured performance entries. */
 void xmrig::Miner::normalizeAlgoCapabilities()
 {
     std::map<Algorithm::Id, float> normalizedPerfs;
+    Algorithms normalizedAlgos;
 
     for (const auto &algoPerf : m_algoPerfs) {
         const Algorithm algo(algoPerf.first);
         if (algo.isValid()) {
             normalizedPerfs[algo.id()] = algoPerf.second;
+            normalizedAlgos.emplace_back(algo.id());
         }
     }
 
     for (const Algorithm &algo : m_algos) {
-        if (algo.isValid() && normalizedPerfs.count(algo.id()) == 0) {
-            normalizedPerfs[algo.id()] = 1.0F;
+        if (algo.isValid()) {
+            normalizedAlgos.emplace_back(algo.id());
         }
     }
 
-    m_algos.clear();
-    m_algoPerfs.clear();
+    std::sort(normalizedAlgos.begin(), normalizedAlgos.end(), [](const Algorithm &left, const Algorithm &right) {
+        return left.id() < right.id();
+    });
+    normalizedAlgos.erase(std::unique(normalizedAlgos.begin(), normalizedAlgos.end(), [](const Algorithm &left, const Algorithm &right) {
+        return left.id() == right.id();
+    }), normalizedAlgos.end());
 
-    for (const auto &algoPerf : normalizedPerfs) {
-        m_algos.emplace_back(algoPerf.first);
-        m_algoPerfs.insert(algoPerf);
-    }
+    m_algos = std::move(normalizedAlgos);
+    m_algoPerfs = std::move(normalizedPerfs);
 }
 /* MoneroOcean change: end */
 

@@ -90,6 +90,51 @@ test.describe("MoneroOcean algo switching groups", { concurrency: false }, () =>
         });
     });
 
+    test("miners with the same unknown performances share one upstream", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            const unknown = {
+                algos: ["rx/0", "cn-heavy/xhv"]
+            };
+
+            await addMiner("miner-unknown-a", unknown);
+            await pool.waitForGetjobs(1);
+            await addMiner("miner-unknown-b", unknown);
+            await pool.waitForGetjobs(2);
+
+            assert.equal(pool.logins.length, 1, "unknown miners with the same algo set should share one upstream");
+            assertAlgoPayload(pool.getjobs[1].message, unknown.algos, {
+                "rx/0": 1000,
+                "cn-heavy/xhv": 10
+            }, "unknown common getjob");
+        });
+    });
+
+    test("a measured miner and an unknown miner use separate upstreams", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            const measured = {
+                algos: ["rx/0", "cn-heavy/xhv"],
+                perfs: {
+                    "rx/0": 1,
+                    "cn-heavy/xhv": 1
+                }
+            };
+            const unknown = {
+                algos: ["rx/0", "cn-heavy/xhv"]
+            };
+
+            await addMiner("miner-measured", measured);
+            await pool.waitForGetjobs(1);
+            await addMiner("miner-unknown", unknown);
+            await pool.waitForLogins(2);
+
+            assert.equal(pool.logins.length, 2, "unknown performance data must not join a measured upstream");
+            assertAlgoPayload(pool.logins[1].message, unknown.algos, {
+                "rx/0": 1000,
+                "cn-heavy/xhv": 10
+            }, "unknown separate login");
+        });
+    });
+
     test("miner with a disjoint algo set opens a separate upstream", async () => {
         await withProxy(async ({ addMiner, pool }) => {
             await addMiner("miner-base", CAPABILITIES.base);
@@ -124,6 +169,37 @@ test.describe("MoneroOcean algo switching groups", { concurrency: false }, () =>
             minerA.close();
             await pool.waitForGetjobs(3);
             assertAlgoPayload(pool.getjobs[2].message, CAPABILITIES.superset.algos, CAPABILITIES.superset.perfs, "common set after removal");
+        });
+    });
+
+    test("removing a miner does not resurrect performance measured outside the remaining common algos", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            const first = await addMiner("miner-measured-rx", {
+                algos: ["rx/0", "cn-heavy/xhv"],
+                perfs: {
+                    "rx/0": 800
+                }
+            });
+            await pool.waitForGetjobs(1);
+
+            await addMiner("miner-unknown-common", {
+                algos: ["cn-heavy/xhv"]
+            });
+            await pool.waitForGetjobs(2);
+
+            await addMiner("miner-measured-half", {
+                algos: ["cn-heavy/xhv", "cn/half"],
+                perfs: {
+                    "cn/half": 1
+                }
+            });
+            await pool.waitForGetjobs(3);
+
+            first.close();
+            await pool.waitForGetjobs(4);
+            assertAlgoPayload(pool.getjobs[3].message, ["cn-heavy/xhv"], {
+                "cn-heavy/xhv": 10
+            }, "common getjob after measured miner removal");
         });
     });
 

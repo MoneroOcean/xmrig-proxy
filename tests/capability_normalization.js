@@ -24,8 +24,7 @@ test.describe("miner capability normalization", { concurrency: false }, () => {
 
             await pool.waitForGetjobs(1);
             assertAlgoPayload(pool.getjobs[0].message, ["rx/0", "cn-heavy/xhv"], {
-                "rx/0": 900,
-                "cn-heavy/xhv": 1
+                "rx/0": 900
             }, "normalized miner getjob");
         });
     });
@@ -47,7 +46,7 @@ test.describe("miner capability normalization", { concurrency: false }, () => {
         });
     });
 
-    test("algo array entries missing from algo-perf receive a conservative default perf", async () => {
+    test("algo array entries missing from algo-perf remain advertised without fabricated perf values", async () => {
         await withProxy(async ({ addMiner, pool }) => {
             await addMiner("miner-missing-perfs", {
                 algos: ["rx/0", "cn-heavy/xhv", "cn/half"],
@@ -58,9 +57,7 @@ test.describe("miner capability normalization", { concurrency: false }, () => {
 
             await pool.waitForGetjobs(1);
             assertAlgoPayload(pool.getjobs[0].message, ["rx/0", "cn-heavy/xhv", "cn/half"], {
-                "rx/0": 800,
-                "cn-heavy/xhv": 1,
-                "cn/half": 1
+                "rx/0": 800
             }, "missing algo-perf defaults getjob");
         });
     });
@@ -96,6 +93,76 @@ test.describe("miner capability normalization", { concurrency: false }, () => {
 
             await pool.waitForGetjobs(1);
             assertAlgoPayload(pool.getjobs[0].message, DEFAULT_ALGOS, DEFAULT_PERFS, "invalid-only miner getjob");
+        });
+    });
+
+    test("an advertised default and unknown algorithm use only the intersecting default perf", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            await addMiner("miner-default-and-unknown", {
+                algos: ["rx/0", "cn/gpu"]
+            });
+
+            await pool.waitForGetjobs(1);
+            assertAlgoPayload(pool.getjobs[0].message, ["rx/0", "cn/gpu"], {
+                "rx/0": 1000
+            }, "default/unknown fallback getjob");
+        });
+    });
+
+    test("omitted algo-perf uses the default profile only for advertised default algorithms", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            await addMiner("miner-default-profile", {
+                algos: ["rx/0", "cn-heavy/xhv", "cn/half"]
+            });
+
+            await pool.waitForGetjobs(1);
+            assertAlgoPayload(pool.getjobs[0].message, ["rx/0", "cn-heavy/xhv", "cn/half"], {
+                "rx/0": 1000,
+                "cn-heavy/xhv": 10,
+                "cn/half": 1
+            }, "advertised default profile getjob");
+        });
+    });
+
+    test("a known partial algo-perf map preserves only its measured keys", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            await addMiner("miner-partial-perfs", {
+                algos: ["rx/0", "cn/gpu"],
+                perfs: {
+                    "rx/0": 800
+                }
+            });
+
+            await pool.waitForGetjobs(1);
+            assertAlgoPayload(pool.getjobs[0].message, ["rx/0", "cn/gpu"], {
+                "rx/0": 800
+            }, "partial algo-perf getjob");
+        });
+    });
+
+    test("a supported nondefault algorithm gets the single weight-one fallback", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            await addMiner("miner-cn-gpu-only", {
+                algos: ["cn/gpu"]
+            });
+
+            await pool.waitForGetjobs(1);
+            assertAlgoPayload(pool.getjobs[0].message, ["cn/gpu"], {
+                "cn/gpu": 1
+            }, "single nondefault fallback getjob");
+        });
+    });
+
+    test("multiple supported nondefault algorithms still advertise one fallback perf", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            await addMiner("miner-nondefault-set", {
+                algos: ["cn/gpu", "cn/r"]
+            });
+
+            await pool.waitForGetjobs(1);
+            assertAlgoPayload(pool.getjobs[0].message, ["cn/r", "cn/gpu"], {
+                "cn/r": 1
+            }, "multiple nondefault fallback getjob");
         });
     });
 });

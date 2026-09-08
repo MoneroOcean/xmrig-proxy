@@ -125,12 +125,20 @@ void AlgoSwitch::computeCommonMinerAlgoPerfs()
     m_algos.clear();
     m_algoPerfs.clear();
 
+    bool first = true;
     for (const auto &minerAlgoPerf : m_minerAlgoPerfs) {
         const Algorithms &algos = minerAlgoPerf.second.first;
         const algo_perfs &perfs = minerAlgoPerf.second.second;
 
-        m_algos = m_algos.empty() ? algos : intersection(m_algos, algos);
-        m_algoPerfs = m_algoPerfs.empty() ? perfs : intersection(m_algoPerfs, perfs);
+        if (first) {
+            m_algos = algos;
+            m_algoPerfs = perfs;
+            first = false;
+        }
+        else {
+            m_algos = intersection(m_algos, algos);
+            m_algoPerfs = intersection(m_algoPerfs, perfs);
+        }
     }
 }
 
@@ -171,8 +179,27 @@ rapidjson::Value AlgoSwitch::algoPerfsToJSON(rapidjson::Document &doc) const
     auto &allocator = doc.GetAllocator();
     rapidjson::Value perfs(rapidjson::kObjectType);
 
-    for (const auto &algoPerf : m_algoPerfs.empty() ? m_defaultAlgoPerfs : m_algoPerfs) {
-        perfs.AddMember(rapidjson::StringRef(serializedAlgoName(Algorithm(algoPerf.first))), algoPerf.second, allocator);
+    const Algorithms &effectiveAlgos = m_algos.empty() ? m_defaultAlgos : m_algos;
+
+    if (!m_algoPerfs.empty()) {
+        for (const auto &algoPerf : m_algoPerfs) {
+            perfs.AddMember(rapidjson::StringRef(serializedAlgoName(Algorithm(algoPerf.first))), algoPerf.second, allocator);
+        }
+
+        return perfs;
+    }
+
+    for (const Algorithm &algo : effectiveAlgos) {
+        const auto found = m_defaultAlgoPerfs.find(algo.id());
+        if (found != m_defaultAlgoPerfs.end()) {
+            perfs.AddMember(rapidjson::StringRef(serializedAlgoName(algo)), found->second, allocator);
+        }
+    }
+
+    if (perfs.ObjectEmpty() && !effectiveAlgos.empty()) {
+        /* This is a selection profile fallback, not a miner benchmark. */
+        const Algorithm &algo = effectiveAlgos.front();
+        perfs.AddMember(rapidjson::StringRef(serializedAlgoName(algo)), 1.0F, allocator);
     }
 
     return perfs;
@@ -204,6 +231,10 @@ bool AlgoSwitch::tryMiner(const Miner *miner, const int upstreamCount) const
         const auto group = m_algoPerfs.find(algo.id());
         const auto candidate = perfs.find(algo.id());
 
+        if (group == m_algoPerfs.end() && candidate == perfs.end()) {
+            continue;
+        }
+
         if (group == m_algoPerfs.end() || candidate == perfs.end()) {
             return false;
         }
@@ -230,10 +261,11 @@ bool AlgoSwitch::tryMiner(const Miner *miner, const int upstreamCount) const
 void AlgoSwitch::addMiner(const Miner *miner)
 {
     const MinerAlgoPerfData data = minerData(miner);
-    const Algorithms algos = m_minerAlgoPerfs.empty() ? data.first : intersection(m_algos, data.first);
-    const algo_perfs perfs = m_minerAlgoPerfs.empty() ? data.second : intersection(m_algoPerfs, data.second);
+    const bool first = m_minerAlgoPerfs.empty();
+    const Algorithms algos = first ? data.first : intersection(m_algos, data.first);
+    const algo_perfs perfs = first ? data.second : intersection(m_algoPerfs, data.second);
 
-    if ((!m_algos.empty() && algos.empty()) || (!m_algoPerfs.empty() && perfs.empty())) {
+    if (!first && algos.empty()) {
         LOG_WARN("[%s] ignoring miner for algo/algo-perf calculations because it would leave no common MoneroOcean algorithms", miner->ip());
         return;
     }
