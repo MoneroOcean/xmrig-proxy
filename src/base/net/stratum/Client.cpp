@@ -1189,6 +1189,15 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
     }
 
     if (id == 1) {
+        if (m_getjobInFlight && result.IsNull()) {
+            m_getjobInFlight = false;
+            if (m_getjobDirty) {
+                sendGetjob();
+            }
+
+            return;
+        }
+
         if (!result.IsObject()) {
             return;
         }

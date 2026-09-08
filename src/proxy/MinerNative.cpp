@@ -234,6 +234,7 @@ void Miner::sendNative(const Job &job) {
             if (!prefix.isEmpty()) result.AddMember("extra_nonce", prefix.toJSON(), r);
             Value extensions(kArrayType);
             extensions.PushBack("algo", r); extensions.PushBack("mo-native", r); extensions.PushBack("keepalive", r);
+            if (hasExtension(EXT_NICEHASH)) extensions.PushBack("nicehash", r);
             if (hasExtension(EXT_SUBMIT_RESULT)) extensions.PushBack("submit-result", r);
             result.AddMember("extensions", extensions, r);
             if (!nativeArray) result.AddMember("job", Value().CopyFrom(params, r), r);
