@@ -16,6 +16,7 @@ Compatible with any pool and any miner that supports NiceHash.
 
 MoneroOcean native algorithm support and the optional miner capabilities are
 described in [MoneroOcean native Stratum](doc/MONEROOCEAN_NATIVE.md).
+Pool-triggered IP bans are described in [IP bans](doc/IP_BANS.md).
 
 ## Why?
 This proxy is designed to handle donation traffic from XMRig. No other solution works well with high connection and disconnection rates.

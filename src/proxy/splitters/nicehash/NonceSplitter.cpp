@@ -23,6 +23,7 @@
  */
 
 #include "proxy/splitters/nicehash/NonceSplitter.h"
+#include "3rdparty/rapidjson/document.h"
 #include "base/io/log/Log.h"
 #include "base/tools/Chrono.h"
 #include "core/config/Config.h"
@@ -211,6 +212,16 @@ void xmrig::NonceSplitter::login(LoginEvent *event)
 {
     if (event->miner()->routeId() != -1) {
         return;
+    }
+
+    // Plain C29 clients use JSON login without capability extensions. Only an
+    // explicit C29 endpoint can infer that dialect; advertised capabilities win.
+    const auto &pools = m_controller->config()->pools().data();
+    if (!event->params.HasMember("algo") && !event->params.HasMember("algo-perf") &&
+        !pools.empty() && pools.front().algorithm() == Algorithm::C29) {
+        event->miner()->setExtension(Miner::EXT_NATIVE, true);
+        event->miner()->setExtension(Miner::EXT_BOOL_SUBMIT, true);
+        event->miner()->setNativeAlgorithm(pools.front().algorithm());
     }
 
     if (event->miner()->mapperId() >= 0) {

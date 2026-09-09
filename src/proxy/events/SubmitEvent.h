@@ -27,6 +27,7 @@
 
 
 #include "net/JobResult.h"
+#include "proxy/Miner.h"
 #include "proxy/Error.h"
 #include "proxy/events/MinerEvent.h"
 
@@ -63,7 +64,9 @@ protected:
         : MinerEvent(SubmitType, miner),
           request(id, jobId, nonce, result, algorithm, sig, sig_data, commitment, view_tag, extra_nonce),
           m_error(Error::NoError)
-    {}
+    {
+        request.minerIp = miner ? miner->ip() : nullptr;
+    }
 
 private:
     Error::Code m_error;

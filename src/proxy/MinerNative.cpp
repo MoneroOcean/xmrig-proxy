@@ -65,7 +65,10 @@ bool Miner::dispatchRequest(const Value &message) {
     const char *method = Json::getString(message, "method");
     if (!method || !(wireId.IsString() || wireId.IsInt64()) || m_requestIds.size() >= 1024) return false;
     const int64_t id = --m_requestSequence;
-    m_requestIds.emplace(id, std::make_pair(serialized(wireId), std::strncmp(method, "mining.", 7) == 0));
+    // Plain C29 JSON clients expect boolean submit replies, unlike XMRig's status object.
+    const bool booleanReply = std::strncmp(method, "mining.", 7) == 0 ||
+        (std::strcmp(method, "submit") == 0 && hasExtension(EXT_BOOL_SUBMIT));
+    m_requestIds.emplace(id, std::make_pair(serialized(wireId), booleanReply));
     const auto &params = Json::getValue(message, "params");
     return parseNativeRequest(id, method, params, message) || parseRequest(id, method, params);
 }
@@ -140,12 +143,29 @@ void Miner::sendSubscription() {
     subscriptions.PushBack("EthereumStratum/1.0.0", a);
     result.PushBack(subscriptions, a);
     result.PushBack(prefix.toJSON(), a);
-    result.PushBack(static_cast<unsigned>(8 - prefix.size() / 2), a);
+    // EthereumStratum derives the remaining nonce width from the prefix.
+    if (!m_nativeProtocol || (m_job.algorithm() != Algorithm::ETHASH && m_job.algorithm() != Algorithm::ETCHASH)) {
+        result.PushBack(static_cast<unsigned>(8 - prefix.size() / 2), a);
+    }
     replyResult(m_subscribeId, result);
     m_subscribeId = 0;
 }
 
 bool Miner::parseNativeRequest(int64_t id, const char *method, const Value &params, const Value &message) {
+    if (strcmp(method, "eth_submitHashrate") == 0) {
+        if (m_state != ReadyState || !hasExtension(EXT_NATIVE)) {
+            replyWithError(id, Error::toString(Error::Unauthenticated));
+        }
+        else if (!params.IsArray() || params.Size() != 2 || !params[0].IsString() || !params[1].IsString()) {
+            replyWithError(id, Error::toString(Error::InvalidMethod));
+        }
+        else {
+            // Optional miner telemetry: acknowledge it, but never trust it for share accounting.
+            heartbeat();
+            replyResult(id, Value(true));
+        }
+        return true;
+    }
     if (strcmp(method, "mining.subscribe") == 0) {
         if (!params.IsArray() || params.Empty() || !params[0].IsString() || m_subscribeId) {
             replyWithError(id, Error::toString(Error::InvalidMethod)); return true;
@@ -252,7 +272,12 @@ void Miner::sendNative(const Job &job) {
         extra.AddMember("method", "mining.set_extranonce", e);
         extra.AddMember("algo", job.algorithm().toJSON(), e);
         Value values(kArrayType);
-        values.PushBack(prefix.toJSON(), e); values.PushBack(static_cast<unsigned>(8 - prefix.size() / 2), e);
+        values.PushBack(prefix.toJSON(), e);
+        // Standard Ethereum/KawPow Stratum uses only the prefix; preserve MO's width hint.
+        if (!m_nativeProtocol || (job.algorithm() != Algorithm::KAWPOW_RVN &&
+            job.algorithm() != Algorithm::ETHASH && job.algorithm() != Algorithm::ETCHASH)) {
+            values.PushBack(static_cast<unsigned>(8 - prefix.size() / 2), e);
+        }
         extra.AddMember("params", values, e);
         send(extra);
     }

@@ -71,6 +71,7 @@ public:
         EXT_CONNECT,
         EXT_NATIVE,
         EXT_SUBMIT_RESULT,
+        EXT_BOOL_SUBMIT,
         EXT_MAX
     };
 

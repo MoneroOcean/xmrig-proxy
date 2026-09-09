@@ -86,6 +86,10 @@ void xmrig::Miners::onEvent(IEvent *event)
 void xmrig::Miners::add(Miner *miner)
 {
     m_miners[miner->id()] = miner;
+
+    if (m_ipBan.isBanned(miner->ip(), Chrono::steadyMSecs())) {
+        miner->close();
+    }
 }
 
 
@@ -101,6 +105,7 @@ void xmrig::Miners::remove(Miner *miner)
 void xmrig::Miners::tick()
 {
     const uint64_t now = Chrono::steadyMSecs();
+    m_ipBan.prune(now);
     std::vector<Miner*> expired;
 
     for (auto const &kv : m_miners) {

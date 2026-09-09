@@ -46,6 +46,7 @@ set(HEADERS
     src/proxy/log/ShareLog.h
     src/proxy/Login.h
     src/proxy/Miner.h
+    src/proxy/IpBan.h
     src/proxy/Miners.h
     src/proxy/Proxy.h
     src/proxy/ProxyDebug.h
@@ -93,6 +94,7 @@ set(SOURCES
     src/proxy/Miner.cpp
     src/proxy/MinerNative.cpp
     src/proxy/Miners.cpp
+    src/proxy/MinersBan.cpp
     src/proxy/Proxy.cpp
     src/proxy/ProxyDebug.cpp
     src/proxy/Server.cpp
@@ -205,6 +207,9 @@ target_link_libraries(${CMAKE_PROJECT_NAME} ${OPENSSL_LIBRARIES} ${UV_LIBRARIES}
 
 add_executable(native-target-tests tests/native_targets.cpp)
 target_include_directories(native-target-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+
+add_executable(ip-ban-tests tests/ip_ban.cpp)
+target_include_directories(ip-ban-tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
 
 if (CMAKE_CXX_COMPILER_ID MATCHES Clang AND CMAKE_BUILD_TYPE STREQUAL Release AND NOT CMAKE_GENERATOR STREQUAL Xcode)
     add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD COMMAND ${CMAKE_STRIP} "$<TARGET_FILE:${CMAKE_PROJECT_NAME}>")

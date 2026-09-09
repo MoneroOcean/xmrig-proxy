@@ -129,6 +129,7 @@ xmrig::Proxy::Proxy(Controller *controller) :
     Events::subscribe(IEvent::SubmitType, m_workers);
 
     Events::subscribe(IEvent::AcceptType, m_stats);
+    Events::subscribe(IEvent::AcceptType, m_miners);
     Events::subscribe(IEvent::AcceptType, m_shareLog);
     Events::subscribe(IEvent::AcceptType, m_workers);
 

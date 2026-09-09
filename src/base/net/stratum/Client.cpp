@@ -300,6 +300,7 @@ int64_t xmrig::Client::submit(const JobResult &result)
     m_results[m_sequence] = SubmitResult(m_sequence, result.diff, result.actualDiff(), 0, result.backend);
 #   endif
     m_results[m_sequence].assignedDiff = result.assignedDiff;
+    m_results[m_sequence].minerIp = result.minerIp;
 
     return send(doc);
 }

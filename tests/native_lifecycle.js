@@ -208,7 +208,9 @@ test.describe("native lifecycle boundaries", { concurrency: false }, () => {
                     config.timeoutMs, `${algo} fixed subscription`);
                 assert.equal(subscription.error, null);
                 assert.match(subscription.result[1], /^abcd[0-9a-f]{2}$/i);
-                assert.equal(subscription.result[2], 5);
+                assert.equal(subscription.result.length, algo === "ethash" ? 2 : 3,
+                    `${algo} subscription result width`);
+                if (algo === "autolykos2") assert.equal(subscription.result[2], 5);
                 assert.equal(miner.peer.messages.filter(message =>
                     message.method === "mining.set_difficulty" || message.method === "mining.notify").length, 0,
                 `${algo} sent no work before authorization`);

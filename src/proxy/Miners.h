@@ -32,6 +32,7 @@
 
 
 #include "interfaces/IEventListener.h"
+#include "proxy/IpBan.h"
 
 
 namespace xmrig {
@@ -50,7 +51,7 @@ public:
 
 protected:
     void onEvent(IEvent *event) override;
-    inline void onRejectedEvent(IEvent *) override {}
+    void onRejectedEvent(IEvent *event) override;
 
 private:
     constexpr static int kTickInterval = 1 * 1000;
@@ -59,6 +60,7 @@ private:
     void remove(Miner *miner);
     void tick();
 
+    IpBan m_ipBan;
     std::map<int64_t, Miner*> m_miners;
     uv_timer_t *m_timer;
 };

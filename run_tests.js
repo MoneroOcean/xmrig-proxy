@@ -162,6 +162,12 @@ function findNativeTargetBinary(proxyBinary) {
     return fs.existsSync(file) ? file : null;
 }
 
+function findIpBanTestBinary(proxyBinary) {
+    const name = process.platform === "win32" ? "ip-ban-tests.exe" : "ip-ban-tests";
+    const file = path.join(path.dirname(proxyBinary), name);
+    return fs.existsSync(file) ? file : null;
+}
+
 function buildProxy(options) {
     if (options.binary) {
         if (!fs.existsSync(options.binary)) {
@@ -182,7 +188,7 @@ function buildProxy(options) {
     return findBinary(options.buildDir);
 }
 
-function runNodeTests(binary, nativeTargetBinary, options) {
+function runNodeTests(binary, nativeTargetBinary, ipBanTestBinary, options) {
     const env = Object.assign({}, process.env, {
         XMRIG_PROXY_TEST_BINARY: binary,
         XMRIG_PROXY_TEST_TIMEOUT_MS: String(options.timeoutMs),
@@ -194,6 +200,10 @@ function runNodeTests(binary, nativeTargetBinary, options) {
     }
     else {
         delete env.XMRIG_PROXY_NATIVE_TARGET_BINARY;
+    }
+
+    if (ipBanTestBinary) {
+        run(ipBanTestBinary, []);
     }
 
     run(process.execPath, [
@@ -208,9 +218,13 @@ function main() {
     const options = parseArgs(process.argv.slice(2));
     const binary = buildProxy(options);
     const nativeTargetBinary = findNativeTargetBinary(binary);
+    const ipBanTestBinary = findIpBanTestBinary(binary);
 
     if (!nativeTargetBinary && options.build && !options.binary) {
         throw new Error(`native-target-tests binary not found beside ${binary}`);
+    }
+    if (!ipBanTestBinary && options.build && !options.binary) {
+        throw new Error(`ip-ban-tests binary not found beside ${binary}`);
     }
 
     console.log(`testing ${binary}`);
@@ -220,7 +234,13 @@ function main() {
     else {
         console.log("skipping native-target-tests: sibling binary not found (use --skip-build only when it is unavailable)");
     }
-    runNodeTests(binary, nativeTargetBinary, options);
+    if (ipBanTestBinary) {
+        console.log(`testing ${ipBanTestBinary}`);
+    }
+    else {
+        console.log("skipping ip-ban-tests: sibling binary not found (use --skip-build only when it is unavailable)");
+    }
+    runNodeTests(binary, nativeTargetBinary, ipBanTestBinary, options);
 }
 
 try {

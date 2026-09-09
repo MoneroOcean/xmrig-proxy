@@ -145,7 +145,131 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
                 config.timeoutMs, "fixed KawPow job");
             assert.equal(job.algo, "kawpow");
             assert.equal(job.params.length, 7);
+            const extranonce = await miner.peer.waitForMessage(message => message.method === "mining.set_extranonce",
+                config.timeoutMs, "KawPow extranonce assignment");
+            assert.deepEqual(extranonce.params, [subscription.result[1]]);
         }, { poolFactory: timeout => new FixedNativePool(timeout, "kawpow"), proxyArgs: ["--algo=kawpow"] });
+    });
+
+    for (const algo of ["ethash", "etchash"]) {
+        test(`${algo} EthereumStratum subscribe and authorize use a suffix nonce`, async () => {
+            await withProxy(async ({ miners, proxyPort, config, pool }) => {
+                const miner = new FakeMiner(`standard-${algo}`, proxyPort, config.timeoutMs);
+                miners.push(miner);
+                await miner.connect();
+
+                miner.peer.send({ id: "subscribe", method: "mining.subscribe",
+                    params: [`standard-${algo}`, "EthereumStratum/1.0.0"] });
+                const subscription = await miner.peer.waitForMessage(message => message.id === "subscribe",
+                    config.timeoutMs, `${algo} EthereumStratum subscription`);
+                assert.equal(subscription.error, null);
+                assert.equal(subscription.result.length, 2,
+                    `${algo} EthereumStratum subscription omits the nonce-size field`);
+                assert.deepEqual(subscription.result[0].slice(0, 1), ["mining.notify"]);
+                assert.equal(subscription.result[0][2], "EthereumStratum/1.0.0");
+                const prefix = subscription.result[1];
+                assert.match(prefix, /^abcd[0-9a-f]{2}$/i);
+
+                miner.peer.send({ id: "authorize", method: "mining.authorize",
+                    params: [`standard-${algo}`, "x"] });
+                const authorization = await miner.peer.waitForMessage(message => message.id === "authorize",
+                    config.timeoutMs, `${algo} EthereumStratum authorization`);
+                assert.equal(authorization.error, null);
+                assert.equal(authorization.result, true);
+
+                const extranonce = await miner.peer.waitForMessage(
+                    message => message.method === "mining.set_extranonce" && message.algo === algo,
+                    config.timeoutMs, `${algo} EthereumStratum extranonce`);
+                assert.deepEqual(extranonce.params, [prefix]);
+
+                const control = await miner.peer.waitForMessage(
+                    message => message.method === "mining.set_difficulty" && message.algo === algo,
+                    config.timeoutMs, `${algo} EthereumStratum difficulty`);
+                assert.deepEqual(control.params, fixture(algo, "fixed-1")[0].params);
+
+                const job = await miner.peer.waitForMessage(
+                    message => message.method === "mining.notify" && message.algo === algo,
+                    config.timeoutMs, `${algo} EthereumStratum job`);
+                assert.match(job.params[0], /^fixed-\d+$/, `${algo} generated job ID`);
+                assert.deepEqual(job.params, fixture(algo, job.params[0])[1].params);
+
+                const suffix = "0102030405";
+                assert.equal(suffix.length, 16 - prefix.length);
+                const submitParams = [`standard-${algo}`, job.params[0], `0x${suffix}`];
+                miner.peer.send({ id: "submit", method: "mining.submit", params: submitParams });
+                const response = await miner.peer.waitForMessage(message => message.id === "submit",
+                    config.timeoutMs, `${algo} suffix nonce response`);
+                assert.equal(response.error, null);
+                assert.equal(response.result, true);
+                await pool.waitForSubmits(1);
+                const forwarded = pool.submits.find(item => item.message.params[1] === job.params[0]);
+                assert.ok(forwarded, `${algo} suffix nonce reached the upstream`);
+                assert.equal(forwarded.message.params[2], `${prefix}${suffix}`,
+                    `${algo} forwards the full prefixed nonce`);
+            }, {
+                poolFactory: timeout => new FixedNativePool(timeout, algo),
+                proxyArgs: [`--algo=${algo}`],
+                waitForInitialPoolLogin: false
+            });
+        });
+
+        test(`${algo} explicit MO-native login retains the nonce-width field`, async () => {
+            await withProxy(async ({ miners, proxyPort, config }) => {
+                const miner = new FakeMiner(`mo-native-${algo}`, proxyPort, config.timeoutMs);
+                miners.push(miner);
+                await miner.connect();
+                miner.peer.send({ id: 1, method: "login", params: {
+                    login: `mo-native-${algo}`,
+                    pass: "x",
+                    agent: "offline-mo-native",
+                    algo: [algo],
+                    "algo-perf": { [algo]: 100 },
+                    extensions: ["mo-native", "submit-result"]
+                } });
+                const login = await miner.peer.waitForMessage(message => message.id === 1,
+                    config.timeoutMs, `${algo} MO-native login`);
+                assert.equal(login.error, null);
+                assert.equal(login.result.algo, algo);
+                const extranonce = await miner.peer.waitForMessage(
+                    message => message.method === "mining.set_extranonce" && message.algo === algo,
+                    config.timeoutMs, `${algo} MO-native extranonce`);
+                assert.deepEqual(extranonce.params, [login.result.extra_nonce, 5]);
+            }, {
+                poolFactory: timeout => new FixedNativePool(timeout, algo),
+                proxyArgs: [`--algo=${algo}`]
+            });
+        });
+    }
+
+    test("native hashrate reports are acknowledged without forwarding or submitting shares", async () => {
+        await withProxy(async ({ miners, proxyPort, config, pool }) => {
+            const miner = new FakeMiner("hashrate-report", proxyPort, config.timeoutMs);
+            miners.push(miner);
+            await miner.connect();
+            const report = { method: "eth_submitHashrate", params: ["0x1234", "0x" + "ab".repeat(32)] };
+            miner.peer.send({ ...report, id: "before-login" });
+            const denied = await miner.peer.waitForMessage(message => message.id === "before-login",
+                config.timeoutMs, "unauthorized hashrate report");
+            assert.ok(denied.error);
+            miner.peer.send({ id: 1, method: "mining.subscribe", params: ["lolMiner-test", "EthereumStratum/1.0.0"] });
+            await miner.peer.waitForMessage(message => message.id === 1, config.timeoutMs, "subscription");
+            miner.peer.send({ id: 2, method: "mining.authorize", params: ["user", "x"] });
+            await miner.peer.waitForMessage(message => message.id === 2, config.timeoutMs, "authorization");
+            for (const id of [3, "rate-again"]) {
+                miner.peer.send({ ...report, id });
+                const reply = await miner.peer.waitForMessage(message => message.id === id,
+                    config.timeoutMs, "hashrate acknowledgement");
+                assert.equal(reply.error, null);
+                assert.equal(reply.result, true);
+            }
+            miner.peer.send({ id: "bad-rate", method: "eth_submitHashrate", params: [] });
+            const invalid = await miner.peer.waitForMessage(message => message.id === "bad-rate",
+                config.timeoutMs, "malformed hashrate report");
+            assert.ok(invalid.error);
+            assert.equal(pool.submits.length, 0);
+            const next = await pushAndReceive(pool, miner, "etchash", "after-hashrate-report");
+            assert.equal(next.algo, "etchash", "reports do not close the mining connection");
+        }, { poolFactory: timeout => new FixedNativePool(timeout, "etchash"), proxyArgs: ["--algo=etchash"] });
     });
 
     test("native reservation does not bypass the configured access password", async () => {

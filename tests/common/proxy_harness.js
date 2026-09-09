@@ -348,10 +348,11 @@ class FakePool {
 }
 
 class FakeMiner {
-    constructor(name, port, timeoutMs) {
+    constructor(name, port, timeoutMs, options = {}) {
         this.name = name;
         this.port = port;
         this.timeoutMs = timeoutMs;
+        this.localAddress = options.localAddress;
         this.socket = null;
         this.peer = null;
         this.lastJob = null;
@@ -363,7 +364,9 @@ class FakeMiner {
         while (Date.now() - started < this.timeoutMs) {
             try {
                 await new Promise((resolve, reject) => {
-                    const socket = net.connect({ host: "127.0.0.1", port: this.port });
+                    const options = { host: "127.0.0.1", port: this.port };
+                    if (this.localAddress) options.localAddress = this.localAddress;
+                    const socket = net.connect(options);
                     socket.once("connect", () => {
                         this.socket = socket;
                         this.peer = new JsonPeer(socket, this.name);
@@ -417,7 +420,10 @@ class FakeMiner {
 
         assert.equal(response.error, null, `${this.name} login returned an error`);
         assert.ok(response.result && response.result.job, `${this.name} login response does not contain a job`);
-        this.lastJob = response.result.job;
+        // A newer job notification may have been parsed before the login wait resumes.
+        if (!this.lastJob) {
+            this.lastJob = response.result.job;
+        }
     }
 
     async waitForJob(predicate, description) {
@@ -529,10 +535,12 @@ async function withProxy(testFn, options = {}) {
 
     try {
         proxy = spawnProxy(config.binary, pool.port, proxyPort, config, Object.assign({ cwd: proxyCwd }, options));
-        await pool.waitForLogins(1);
+        if (options.waitForInitialPoolLogin !== false) {
+            await pool.waitForLogins(1);
+        }
 
-        const addMiner = async (name, capabilities) => {
-            const miner = new FakeMiner(name, proxyPort, config.timeoutMs);
+        const addMiner = async (name, capabilities, connectionOptions) => {
+            const miner = new FakeMiner(name, proxyPort, config.timeoutMs, connectionOptions);
             miners.push(miner);
             await miner.connect();
             await miner.login(capabilities);

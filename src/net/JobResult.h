@@ -47,6 +47,8 @@ public:
     Algorithm algorithm;
     const char *nonce         = nullptr;
     const char *result        = nullptr;
+    // Borrowed from the connected Miner for the synchronous upstream submit.
+    const char *minerIp       = nullptr;
     const char *sig           = nullptr;
     const char *sig_data      = nullptr;
     const char *commitment    = nullptr;

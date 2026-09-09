@@ -27,6 +27,7 @@
 
 
 #include "base/tools/Chrono.h"
+#include "base/tools/String.h"
 
 
 namespace xmrig {
@@ -55,6 +56,8 @@ public:
     uint64_t diff           = 0;
     uint64_t elapsed        = 0;
     uint64_t assignedDiff   = 0;
+    // Owning copy retained until the upstream submit response arrives.
+    String minerIp;
 
 private:
     uint64_t m_start        = 0;
