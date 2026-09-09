@@ -258,10 +258,11 @@ test.describe("proxy IP bans", { concurrency: false }, () => {
 
         await withProxy(async ({ addMiner, miners, pool, config, proxyPort }) => {
             const first = await addMiner("ban-reverse-first", legacyCapabilities(), { localAddress: "127.0.0.1" });
-            const second = await addMiner("ban-reverse-second", legacyCapabilities(), { localAddress: "127.0.0.2" });
-
             sendLegacyShare(first, 30, 20000);
             await pool.waitForSubmits(1);
+
+            // Wait for the first upstream submit before the second membership refresh.
+            const second = await addMiner("ban-reverse-second", legacyCapabilities(), { localAddress: "127.0.0.2" });
             sendLegacyShare(second, 31, 20000);
             await pool.waitForSubmits(2);
 
