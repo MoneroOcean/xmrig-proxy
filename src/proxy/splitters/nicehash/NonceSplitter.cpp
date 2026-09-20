@@ -237,11 +237,20 @@ void xmrig::NonceSplitter::login(LoginEvent *event)
 
     if (event->miner()->mapperId() >= 0) {
         const size_t id = static_cast<size_t>(event->miner()->mapperId());
-        if (id < m_upstreams.size()) {
-            m_upstreams[id]->refresh(event->miner());
+        if (id >= m_upstreams.size()) {
+            return;
         }
 
-        return;
+        NonceMapper *mapper = m_upstreams[id];
+        if (!event->miner()->nativeRemapRequired()) {
+            mapper->refresh(event->miner());
+            return;
+        }
+
+        mapper->remove(event->miner());
+        event->miner()->setMapperId(-1);
+        event->miner()->invalidateJobs();
+        event->miner()->clearNativeRemapRequired();
     }
 
     assign(event->miner());

@@ -245,6 +245,54 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
             proxyArgs: ["--algo=pearlhash"] });
     });
 
+    test("object type selects its native algorithm over the configured default", async () => {
+        await withProxy(async ({ miners, proxyPort, config }) => {
+            const miner = new FakeMiner("srb-pearl", proxyPort, config.timeoutMs);
+            miners.push(miner);
+            await miner.connect();
+            miner.peer.send({ id: 1, method: "mining.subscribe", params: ["SRBMiner-MULTI/3.6.7"] });
+            await miner.peer.waitForMessage(message => message.id === 1,
+                config.timeoutMs, "SRBMiner subscription");
+            miner.peer.send({ id: 2, method: "mining.authorize", params: {
+                wallet: "srb-wallet", worker: "rig", agent: "SRBMiner-MULTI/3.6.7", type: "pearlhash"
+            } });
+            const authorization = await miner.peer.waitForMessage(message => message.id === 2,
+                config.timeoutMs, "SRBMiner authorization");
+            assert.equal(authorization.error, null);
+            assert.equal(authorization.result, true);
+            const job = await miner.peer.waitForMessage(message =>
+                (message.method === "job" || message.method === "mining.notify") &&
+                message.params && !Array.isArray(message.params) &&
+                /^(?:login|switch)-pearl-/.test(message.params.job_id),
+            config.timeoutMs, "SRBMiner Pearl job");
+            assert.match(job.params.job_id, /^(?:login|switch)-pearl-/);
+        }, { poolFactory: timeout => new PearlSwitchPool(timeout),
+            proxyArgs: ["--algo=rx/0"] });
+    });
+
+    for (const [name, params] of [
+        ["array authorization", ["wallet.worker", "x"]],
+        ["object authorization without type", {
+            wallet: "wallet", worker: "worker", agent: "SRBMiner-MULTI/3.6.7"
+        }]
+    ]) {
+        test(`${name} cannot use a provisional Pearl subscription`, async () => {
+            await withProxy(async ({ miners, proxyPort, config }) => {
+                const miner = new FakeMiner(`provisional-${name}`, proxyPort, config.timeoutMs);
+                miners.push(miner);
+                await miner.connect();
+                miner.peer.send({ id: 1, method: "mining.subscribe", params: ["SRBMiner-MULTI/3.6.7"] });
+                await miner.peer.waitForMessage(message => message.id === 1,
+                    config.timeoutMs, `${name} subscription`);
+                miner.peer.send({ id: 2, method: "mining.authorize", params });
+                const authorization = await miner.peer.waitForMessage(message => message.id === 2,
+                    config.timeoutMs, `${name} rejection`);
+                assert.notEqual(authorization.error, null);
+            }, { poolFactory: timeout => new PearlSwitchPool(timeout),
+                proxyArgs: ["--algo=rx/0"] });
+        });
+    }
+
     for (const algo of ["ethash", "etchash"]) {
         test(`${algo} EthereumStratum subscribe and authorize use a suffix nonce`, async () => {
             await withProxy(async ({ miners, proxyPort, config, pool }) => {

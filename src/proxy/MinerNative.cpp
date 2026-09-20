@@ -134,7 +134,14 @@ String Miner::assignedPrefix(const Job &job) const {
 }
 void Miner::sendSubscription() {
     if (!m_subscribeId || mapperId() < 0) return;
-    const String prefix = assignedPrefix(m_job);
+    String prefix = assignedPrefix(m_job);
+    if (prefix.isEmpty() && m_nativeProtocol && m_algos.size() == 1 &&
+        !Algorithm::isNativeOnly(m_algos.front().id())) {
+        // Object-Stratum identifies Pearl in mining.authorize, after subscribe.
+        // Its proof does not use the provisional extranonce returned here.
+        prefix = "00";
+        m_pendingPearlAuthorize = true;
+    }
     if (prefix.isEmpty() || prefix.size() >= 16) return;
     Document result(kArrayType);
     auto &a = result.GetAllocator();
@@ -145,7 +152,10 @@ void Miner::sendSubscription() {
     result.PushBack(subscriptions, a);
     result.PushBack(prefix.toJSON(), a);
     // EthereumStratum derives the remaining nonce width from the prefix.
-    if (!m_nativeProtocol || (m_job.algorithm() != Algorithm::ETHASH && m_job.algorithm() != Algorithm::ETCHASH)) {
+    if (m_pendingPearlAuthorize) {
+        result.PushBack(6U, a);
+    }
+    else if (!m_nativeProtocol || (m_job.algorithm() != Algorithm::ETHASH && m_job.algorithm() != Algorithm::ETCHASH)) {
         result.PushBack(static_cast<unsigned>(8 - prefix.size() / 2), a);
     }
     replyResult(m_subscribeId, result);
@@ -191,6 +201,9 @@ bool Miner::parseNativeRequest(int64_t id, const char *method, const Value &para
         if (!m_nativeProtocol || m_state != WaitLoginState) {
             replyWithError(id, Error::toString(Error::Unauthenticated)); return true;
         }
+        if (m_pendingPearlAuthorize && !params.IsObject()) {
+            replyWithError(id, Error::toString(Error::InvalidMethod)); return true;
+        }
         const char *user = nullptr;
         const char *pass = nullptr;
         std::string objectUser;
@@ -204,6 +217,18 @@ bool Miner::parseNativeRequest(int64_t id, const char *method, const Value &para
             pass = Json::getString(params, "pass");
             if (wallet && worker) {
                 if (!pass) pass = "x";
+                const char *type = Json::getString(params, "type");
+                const Algorithm algorithm(type ? type : "");
+                if (m_pendingPearlAuthorize && algorithm != Algorithm::PEARLHASH) {
+                    replyWithError(id, Error::toString(Error::InvalidMethod)); return true;
+                }
+                if (algorithm.isValid() && Algorithm::isNativeOnly(algorithm.id())) {
+                    if (mapperId() >= 0 && (m_algos.size() != 1 || m_algos.front() != algorithm)) {
+                        m_nativeRemapRequired = true;
+                    }
+                    setNativeAlgorithm(algorithm);
+                    m_pendingPearlAuthorize = false;
+                }
                 objectUser = wallet;
                 if (*worker) objectUser += std::string(".") + worker;
                 user = objectUser.c_str();
@@ -223,7 +248,10 @@ bool Miner::parseNativeRequest(int64_t id, const char *method, const Value &para
         login.AddMember("algo", algos, a);
         login.AddMember("extensions", extensions, a);
         parseRequest(id, "login", login);
-        if (m_state == WaitReadyState) { setState(ReadyState); success(id, "OK"); }
+        if (m_state == WaitReadyState) {
+            setState(ReadyState);
+            success(id, "OK");
+        }
         return true;
     }
     if (strcmp(method, "mining.submit") == 0) {
