@@ -21,10 +21,12 @@
 #define XMRIG_LINEREADER_H
 
 
+#include "base/kernel/constants.h"
 #include "base/tools/Object.h"
 
 
 #include <cstddef>
+#include <vector>
 
 
 namespace xmrig {
@@ -40,9 +42,9 @@ public:
 
     LineReader() = default;
     LineReader(ILineListener *listener) : m_listener(listener) {}
-    ~LineReader();
 
     inline void setListener(ILineListener *listener) { m_listener = listener; }
+    inline void setMaxSize(size_t size) { if (size > m_maxSize) m_maxSize = size; }
 
     void parse(char *data, size_t size);
     void reset();
@@ -51,9 +53,10 @@ private:
     void add(const char *data, size_t size);
     void getline(char *data, size_t size);
 
-    char *m_buf                 = nullptr;
+    std::vector<char> m_buf;
     ILineListener *m_listener   = nullptr;
-    size_t m_pos                = 0;
+    size_t m_maxSize            = XMRIG_NET_BUFFER_CHUNK_SIZE;
+    bool m_discard              = false;
 };
 
 

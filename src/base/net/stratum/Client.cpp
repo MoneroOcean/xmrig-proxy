@@ -46,6 +46,7 @@
 #include "base/kernel/Platform.h"
 #include "base/net/dns/Dns.h"
 #include "base/net/dns/DnsRecords.h"
+#include "base/net/stratum/NativeTarget.h"
 #include "base/net/stratum/Socks5.h"
 #include "base/net/tools/NetBuffer.h"
 #include "base/tools/Chrono.h"
@@ -514,6 +515,9 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code, const ra
         }
         job.setAlgorithm(m_pool.coin().algorithm(blobVersion));
     }
+    if (!blobData && job.algorithm() == Algorithm::PEARLHASH) {
+        blobData = Json::getString(params, "header");
+    }
 
 #   ifdef XMRIG_PROXY_PROJECT
     if (!m_nativePrefix.isNull()) {
@@ -562,19 +566,33 @@ bool xmrig::Client::parseJob(const rapidjson::Value &params, int *code, const ra
         }
     }
 
-    if (!job.setTarget(Json::getString(params, "target"))) {
-        if (!m_nativeRequested || job.algorithm() != Algorithm::C29) {
-            *code = 5;
-            return false;
+    const char *target = Json::getString(params, "target");
+    if (!job.setTarget(target)) {
+#   ifdef XMRIG_PROXY_PROJECT
+        if (job.algorithm() == Algorithm::PEARLHASH) {
+            const uint64_t difficulty = NativeTarget::difficulty(target, true);
+            if (!difficulty || !job.setNativeTarget(target, true)) {
+                *code = 5;
+                return false;
+            }
+            job.setDiff(difficulty);
         }
+        else
+#   endif
+        {
+            if (!m_nativeRequested || job.algorithm() != Algorithm::C29) {
+                *code = 5;
+                return false;
+            }
 
-        const uint64_t difficulty = Json::getUint64(params, "difficulty");
-        if (difficulty == 0) {
-            *code = 5;
-            return false;
+            const uint64_t difficulty = Json::getUint64(params, "difficulty");
+            if (difficulty == 0) {
+                *code = 5;
+                return false;
+            }
+
+            job.setDiff(difficulty);
         }
-
-        job.setDiff(difficulty);
     }
 
     job.setHeight(Json::getUint64(params, "height"));
@@ -693,15 +711,34 @@ bool xmrig::Client::verifyAlgorithm(const Algorithm &algorithm, const char *algo
 
 bool xmrig::Client::write(const uv_buf_t &buf)
 {
-    const int rc = uv_try_write(stream(), &buf, 1);
-    if (static_cast<size_t>(rc) == buf.len) {
+    if (buf.len > kMaxSendBufferSize ||
+        uv_stream_get_write_queue_size(stream()) > kMaxSendBufferSize - buf.len) {
+        if (!isQuiet()) {
+            LOG_ERR("%s " RED("write error: ") RED_BOLD("\"write queue limit exceeded\""), tag());
+        }
+        close("write queue limit");
+        return false;
+    }
+
+    struct WriteRequest {
+        uv_write_t request{};
+        std::vector<char> data;
+    };
+    auto *request = new WriteRequest;
+    request->data.assign(buf.base, buf.base + buf.len);
+    request->request.data = request;
+    uv_buf_t copy = uv_buf_init(request->data.data(), static_cast<unsigned int>(request->data.size()));
+    const int rc = uv_write(&request->request, stream(), &copy, 1, [](uv_write_t *req, int) {
+        delete static_cast<WriteRequest *>(req->data);
+    });
+    if (rc == 0) {
         return true;
     }
 
+    delete request;
     if (!isQuiet()) {
         LOG_ERR("%s " RED("write error: ") RED_BOLD("\"%s\""), tag(), uv_strerror(rc));
     }
-
     close(uv_strerror(rc));
 
     return false;
@@ -1110,7 +1147,8 @@ void xmrig::Client::parse(char *line, size_t len)
         return;
     }
 
-    if (m_nativeRequested && method && strcmp(method, "mining.notify") == 0) {
+    if ((m_nativeRequested || m_pool.algorithm() == Algorithm::PEARLHASH) && method &&
+        strcmp(method, "mining.notify") == 0) {
         if (parseNativeNotify(doc)) {
             m_listener->onJobReceived(this, m_job, doc);
         }
@@ -1285,6 +1323,23 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
                 sendGetjob();
             }
 
+            return;
+        }
+
+        // Pearl's login dialect acknowledges authorization with a boolean and sends work in a
+        // following object-form mining.notify. Keep an internal client ID; Pearl submits do not
+        // place it on the wire.
+        if (m_pool.algorithm() == Algorithm::PEARLHASH && result.IsBool()) {
+            m_loginInFlight = false;
+            if (!result.GetBool()) {
+                close("login rejected");
+                return;
+            }
+
+            setRpcId("pearlhash");
+            m_failures = 0;
+            m_getjobInFlight = false;
+            m_listener->onLoginSuccess(this);
             return;
         }
 

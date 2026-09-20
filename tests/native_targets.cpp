@@ -93,6 +93,18 @@ void testDivision()
 }
 
 
+void testDifficulty()
+{
+    UInt256 target = {};
+    CHECK(Target::max256DividedBy(10000, target));
+    CHECK(Target::difficulty(hex(target), true) == 10000);
+    Target::reverse(target);
+    CHECK(Target::difficulty(hex(target), false) == 10000);
+    CHECK(Target::difficulty("0000000000000000000000000000000000000000000000000000000000000000", true) == 0);
+    CHECK(Target::difficulty("invalid", true) == 0);
+}
+
+
 void testComparisonAndEndian()
 {
     const UInt256 zero = parseHex("0000000000000000000000000000000000000000000000000000000000000000");
@@ -166,6 +178,7 @@ int main()
 {
     testParsing();
     testDivision();
+    testDifficulty();
     testComparisonAndEndian();
     testGetjobCooldown();
     testCapabilityErrorLog();

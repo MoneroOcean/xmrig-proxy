@@ -108,9 +108,17 @@ void xmrig::Client::Tls::read(const char *data, size_t size)
     if (!SSL_is_init_finished(m_ssl)) {
         const int rc = SSL_connect(m_ssl);
 
-        if (rc < 0 && SSL_get_error(m_ssl, rc) == SSL_ERROR_WANT_READ) {
-            send();
-        } else if (rc == 1) {
+        if (rc <= 0) {
+            const int error = SSL_get_error(m_ssl, rc);
+            if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
+                send();
+                return;
+            }
+
+            LOG_ERR("[%s] TLS handshake failed (%d)", m_client->url(), error);
+            m_client->close();
+        }
+        else {
             X509 *cert = SSL_get_peer_certificate(m_ssl);
             if (!verify(cert)) {
                 X509_free(cert);
@@ -122,9 +130,9 @@ void xmrig::Client::Tls::read(const char *data, size_t size)
             X509_free(cert);
             m_ready = true;
             m_client->login();
-      }
+        }
 
-      return;
+        return;
     }
 
     static char buf[16384]{};

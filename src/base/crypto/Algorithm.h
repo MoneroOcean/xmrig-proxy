@@ -98,6 +98,7 @@ public:
         ETHASH          = 0x66000000,   // "ethash"
         ETCHASH         = 0x66000001,   // "etchash"
         C29             = 0x67000000,   // "c29" / "cuckaroo"
+        PEARLHASH       = 0x70000000,   // "pearlhash"
         KAWPOW_RVN      = 0x6b0f0000,   // "kawpow/rvn"       KawPow (RVN)
         /* MoneroOcean change: begin Panthera is the RandomX-family name MoneroOcean forwards for Scala jobs. */
         RX_XLA          = 0x721211ff,   // "panthera"         Panthera (Scala2).
@@ -191,6 +192,7 @@ public:
     static const char *kETHASH;
     static const char *kETCHASH;
     static const char *kC29;
+    static const char *kPEARLHASH;
 
 #   ifdef XMRIG_ALGO_GHOSTRIDER
     static const char* kGHOSTRIDER;
@@ -218,7 +220,8 @@ public:
     inline bool isValid() const                             { return m_id != INVALID && family() > UNKNOWN; }
     static inline constexpr bool isNativeOnly(Id id)
     {
-        return id == ASTROBWT_V2 || id == AUTOLYKOS2 || id == ETHASH || id == ETCHASH || id == C29 || id == KAWPOW_RVN;
+        return id == ASTROBWT_V2 || id == AUTOLYKOS2 || id == ETHASH || id == ETCHASH ||
+               id == C29 || id == PEARLHASH || id == KAWPOW_RVN;
     }
     inline Id base() const                                  { return base(m_id); }
     inline Id id() const                                    { return m_id; }

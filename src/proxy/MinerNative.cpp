@@ -118,7 +118,8 @@ void Miner::rememberJob(const Job &job) {
     m_diff = job.diff();
 }
 uint64_t Miner::assignedDiff(const Job &job) const {
-    if ((arrayJob(job) || job.algorithm() == Algorithm::C29) && !hasExtension(EXT_SUBMIT_RESULT)) return job.diff();
+    if (job.algorithm() == Algorithm::PEARLHASH ||
+        ((arrayJob(job) || job.algorithm() == Algorithm::C29) && !hasExtension(EXT_SUBMIT_RESULT))) return job.diff();
     return m_customDiff ? std::min(m_customDiff, job.diff()) : job.diff();
 }
 String Miner::assignedPrefix(const Job &job) const {
@@ -187,13 +188,33 @@ bool Miner::parseNativeRequest(int64_t id, const char *method, const Value &para
     }
     if (strcmp(method, "mining.extranonce.subscribe") == 0 && hasExtension(EXT_NATIVE)) { success(id, "OK"); return true; }
     if (strcmp(method, "mining.authorize") == 0) {
-        if (!m_nativeProtocol || m_state != WaitLoginState || !params.IsArray() || params.Size() < 2 || !params[0].IsString() || !params[1].IsString()) {
+        if (!m_nativeProtocol || m_state != WaitLoginState) {
+            replyWithError(id, Error::toString(Error::Unauthenticated)); return true;
+        }
+        const char *user = nullptr;
+        const char *pass = nullptr;
+        std::string objectUser;
+        if (params.IsArray() && params.Size() >= 2 && params[0].IsString() && params[1].IsString()) {
+            user = params[0].GetString();
+            pass = params[1].GetString();
+        }
+        else if (params.IsObject()) {
+            const char *wallet = Json::getString(params, "wallet");
+            const char *worker = Json::getString(params, "worker");
+            pass = Json::getString(params, "pass");
+            if (wallet && worker && pass) {
+                objectUser = wallet;
+                if (*worker) objectUser += std::string(".") + worker;
+                user = objectUser.c_str();
+            }
+        }
+        if (!user || !pass) {
             replyWithError(id, Error::toString(Error::Unauthenticated)); return true;
         }
         Document login(kObjectType);
         auto &a = login.GetAllocator();
-        login.AddMember("login", Value().CopyFrom(params[0], a), a);
-        login.AddMember("pass", Value().CopyFrom(params[1], a), a);
+        login.AddMember("login", Value(user, a), a);
+        login.AddMember("pass", Value(pass, a), a);
         login.AddMember("agent", m_agent.toJSON(login), a);
         Value algos(kArrayType), extensions(kArrayType);
         for (const auto &algo : m_algos) algos.PushBack(algo.toJSON(), a);
@@ -304,33 +325,52 @@ bool Miner::submitJob(int64_t id, const Value &params, const Value *native) {
         replyWithError(id, Error::toString(code));
         return true;
     };
-    const bool nativeArray = native != nullptr;
+    const bool nativeProtocol = native != nullptr;
+    const bool nativeArray = nativeProtocol && params.IsArray();
     if (m_state != ReadyState) return reject(Error::Unauthenticated);
-    if (nativeArray ? (!params.IsArray() || params.Size() < 3 || !params[1].IsString() || !params[2].IsString()) : !params.IsObject()) return reject(Error::LowDifficulty);
-    if (!nativeArray && m_rpcId != Json::getString(params, "id")) return reject(Error::Unauthenticated);
+    if (nativeArray ? (params.Size() < 3 || !params[1].IsString() || !params[2].IsString()) : !params.IsObject()) return reject(Error::LowDifficulty);
     const char *jobId = nativeArray ? params[1].GetString() : Json::getString(params, "job_id");
     if (!jobId) return reject(Error::InvalidJobId);
     const Job *job = m_job.isValid() && m_job.id() == jobId ? &m_job : (m_prevJob.isValid() && m_prevJob.id() == jobId ? &m_prevJob : nullptr);
     if (!job) return reject(Error::InvalidJobId);
+    const bool pearl = !nativeArray && job->algorithm() == Algorithm::PEARLHASH;
+    if (nativeProtocol && !nativeArray && !pearl) return reject(Error::IncorrectAlgorithm);
+    if (!nativeArray && !pearl && m_rpcId != Json::getString(params, "id")) return reject(Error::Unauthenticated);
     if (nativeArray != arrayJob(*job)) return reject(Error::IncorrectAlgorithm);
     const Algorithm claimed(nativeArray ? nullptr : Json::getString(params, "algo"));
     if (claimed.isValid() && claimed != job->algorithm()) return reject(Error::IncorrectAlgorithm);
     const char *hash = nativeArray ? Json::getString(*native, "result") : Json::getString(params, "result");
-    const bool hashRequired = (!nativeArray && job->algorithm() != Algorithm::C29) || hasExtension(EXT_SUBMIT_RESULT);
+    const bool hashRequired = !pearl && ((!nativeArray && job->algorithm() != Algorithm::C29) || hasExtension(EXT_SUBMIT_RESULT));
     NativeTarget::UInt256 hashBytes{};
     if ((hashRequired || hash) && (!hash || strlen(hash) != 64 || !NativeTarget::strictHex64Parse(hash, hashBytes))) return reject(Error::LowDifficulty);
+    if (pearl) {
+        const char *proof = Json::getString(params, "plain_proof");
+        const char *jackpot = Json::getString(params, "jackpot");
+        const auto &factor = Json::getValue(params, "adjustment_factor");
+        const bool hasJackpot = jackpot != nullptr;
+        const bool hasFactor = !factor.IsNull();
+        if (!proof || !*proof || hasJackpot != hasFactor) return reject(Error::LowDifficulty);
+        if (hasJackpot) {
+            if (strlen(jackpot) != 64 || !factor.IsUint() || factor.GetUint() == 0) return reject(Error::LowDifficulty);
+            for (const char *p = jackpot; *p; ++p) {
+                if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f'))) return reject(Error::LowDifficulty);
+            }
+        }
+    }
     std::string nonce;
     if (!nativeArray && params.HasMember("nonce") && params["nonce"].IsUint() && job->algorithm() == Algorithm::C29 && job->nonceSize() == 4) {
         char n[9]; snprintf(n, sizeof(n), "%08x", params["nonce"].GetUint()); nonce = n;
     }
-    else nonce = hexNonce(nativeArray ? params[2].GetString() : Json::getString(params, "nonce"));
+    else if (!pearl) nonce = hexNonce(nativeArray ? params[2].GetString() : Json::getString(params, "nonce"));
     const String prefix = assignedPrefix(*job);
     const size_t width = job->nonceSize();
-    if (width == 8 && !prefix.isEmpty() && nonce.size() == 16 - prefix.size()) nonce = std::string(prefix.data()) + nonce;
+    if (!pearl && width == 8 && !prefix.isEmpty() && nonce.size() == 16 - prefix.size()) nonce = std::string(prefix.data()) + nonce;
     uint8_t nonceBytes[8];
-    if (width > 8 || nonce.size() != width * 2 || !Cvt::fromHex(nonceBytes, width, nonce.c_str(), nonce.size())) return reject(Error::InvalidNonce);
-    if (width == 8 && (prefix.isEmpty() || nonce.compare(0, prefix.size(), hexNonce(prefix.data())) != 0)) return reject(Error::InvalidNonce);
-    if (width == 4 && job->algorithm() != Algorithm::C29 && hasExtension(EXT_NICEHASH) && nonceBytes[3] != m_fixedByte) return reject(Error::InvalidNonce);
+    if (!pearl) {
+        if (width > 8 || nonce.size() != width * 2 || !Cvt::fromHex(nonceBytes, width, nonce.c_str(), nonce.size())) return reject(Error::InvalidNonce);
+        if (width == 8 && (prefix.isEmpty() || nonce.compare(0, prefix.size(), hexNonce(prefix.data())) != 0)) return reject(Error::InvalidNonce);
+        if (width == 4 && job->algorithm() != Algorithm::C29 && hasExtension(EXT_NICEHASH) && nonceBytes[3] != m_fixedByte) return reject(Error::InvalidNonce);
+    }
     if (job->algorithm() == Algorithm::C29) {
         Document payload; payload.Parse(job->nativePayload().data(), job->nativePayload().size());
         const unsigned size = Json::getUint(payload["params"], "proofsize");
@@ -359,10 +399,10 @@ bool Miner::submitJob(int64_t id, const Value &params, const Value *native) {
         AcceptEvent::start(m_mapperId, this, accepted, false, true);
         return true;
     }
-    auto *event = SubmitEvent::create(this, id, jobId, nonce.c_str(), hash, job->algorithm(), Json::getString(params, "sig"), m_signatureData, Json::getString(params, "commitment"), m_viewTag, m_extraNonce);
+    auto *event = SubmitEvent::create(this, id, jobId, pearl ? "" : nonce.c_str(), hash, job->algorithm(), Json::getString(params, "sig"), m_signatureData, Json::getString(params, "commitment"), m_viewTag, m_extraNonce);
     event->request.assignedDiff = minerDiff;
     event->request.setActualDiff(actualDiff);
-    if (nativeArray || job->algorithm() == Algorithm::C29) {
+    if (nativeArray || job->algorithm() == Algorithm::C29 || pearl) {
         Document wire(kObjectType);
         if (native) wire.CopyFrom(*native, wire.GetAllocator());
         else { wire.AddMember("method", "submit", wire.GetAllocator()); wire.AddMember("params", Value().CopyFrom(params, wire.GetAllocator()), wire.GetAllocator()); }

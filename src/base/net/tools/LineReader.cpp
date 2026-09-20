@@ -19,18 +19,10 @@
 
 
 #include "base/net/tools/LineReader.h"
-#include "base/kernel/constants.h"
 #include "base/kernel/interfaces/ILineListener.h"
-#include "base/net/tools/NetBuffer.h"
 
 #include <cassert>
 #include <cstring>
-
-
-xmrig::LineReader::~LineReader()
-{
-    NetBuffer::release(m_buf);
-}
 
 
 void xmrig::LineReader::parse(char *data, size_t size)
@@ -46,28 +38,24 @@ void xmrig::LineReader::parse(char *data, size_t size)
 
 void xmrig::LineReader::reset()
 {
-    if (m_buf) {
-        NetBuffer::release(m_buf);
-        m_buf = nullptr;
-        m_pos = 0;
-    }
+    std::vector<char>().swap(m_buf);
+    m_discard = false;
 }
 
 
 void xmrig::LineReader::add(const char *data, size_t size)
 {
-    if (size + m_pos > XMRIG_NET_BUFFER_CHUNK_SIZE) {
-        // it breaks correctness silently for long lines
+    if (m_discard) {
         return;
     }
 
-    if (!m_buf) {
-        m_buf = NetBuffer::allocate();
-        m_pos = 0;
+    if (m_buf.size() > m_maxSize || size > m_maxSize - m_buf.size()) {
+        std::vector<char>().swap(m_buf);
+        m_discard = true;
+        return;
     }
 
-    memcpy(m_buf + m_pos, data, size);
-    m_pos += size;
+    m_buf.insert(m_buf.end(), data, data + size);
 }
 
 
@@ -83,12 +71,17 @@ void xmrig::LineReader::getline(char *data, size_t size)
         end++;
 
         const auto len = static_cast<size_t>(end - start);
-        if (m_pos) {
-            add(start, len);
-            m_listener->onLine(m_buf, m_pos - 1);
-            m_pos = 0;
+        if (m_discard) {
+            reset();
         }
-        else if (len > 1) {
+        else if (!m_buf.empty()) {
+            add(start, len);
+            if (!m_discard) {
+                m_listener->onLine(m_buf.data(), m_buf.size() - 1);
+            }
+            reset();
+        }
+        else if (len > 1 && len - 1 <= m_maxSize) {
             m_listener->onLine(start, len - 1);
         }
 
@@ -96,9 +89,7 @@ void xmrig::LineReader::getline(char *data, size_t size)
         start = end;
     }
 
-    if (remaining == 0) {
-        return reset();
+    if (remaining > 0) {
+        add(start, remaining);
     }
-
-    add(start, remaining);
 }

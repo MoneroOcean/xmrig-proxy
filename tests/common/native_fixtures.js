@@ -4,7 +4,7 @@ const { FakePool } = require("./proxy_harness.js");
 
 const ALGORITHMS = ["rx/arq", "cn-heavy/xhv", "cn/gpu", "astrobwt/v2",
     "autolykos2", "etchash", "ethash", "flex", "argon2/chukwav2",
-    "cn/half", "rx/0", "cn/r", "c29", "panthera", "ghostrider", "kawpow"];
+    "cn/half", "rx/0", "cn/r", "c29", "pearlhash", "panthera", "ghostrider", "kawpow"];
 const MAX = (1n << 256n) - 1n;
 const target = difficulty => (MAX / BigInt(difficulty)).toString(16).padStart(64, "0");
 
@@ -42,6 +42,10 @@ function fixture(algo, id, profile, upstreamId) {
             Object.assign(base.params, { pre_pow: "00".repeat(120), edgebits: 29,
                 proofsize: profile === "tube" ? 40 : 32, noncebytes: 4, difficulty: 10000 });
         }
+    }
+    if (algo === "pearlhash") {
+        delete base.params.blob;
+        Object.assign(base.params, { header: "56".repeat(76), target: target(10000), cert_version: 3 });
     }
     return [base];
 }

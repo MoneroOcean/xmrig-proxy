@@ -124,47 +124,9 @@ bool parsePrefix(const rapidjson::Value &prefixValue, const rapidjson::Value &re
 }
 
 
-bool nonzeroTarget(const char *value, xmrig::NativeTarget::UInt256 &target)
-{
-    if (!xmrig::NativeTarget::strictHex64Parse(value, target)) {
-        return false;
-    }
-
-    for (const uint8_t byte : target) {
-        if (byte != 0) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-
 uint64_t difficultyFromTarget(const char *value)
 {
-    xmrig::NativeTarget::UInt256 target = {};
-    if (!nonzeroTarget(value, target)) {
-        return 0;
-    }
-
-    uint64_t low = 1;
-    uint64_t high = std::numeric_limits<uint64_t>::max();
-    while (low < high) {
-        const uint64_t middle = low + (high - low + 1) / 2;
-        xmrig::NativeTarget::UInt256 quotient = {};
-        if (!xmrig::NativeTarget::max256DividedBy(middle, quotient)) {
-            return 0;
-        }
-
-        if (xmrig::NativeTarget::compareLex(quotient, target) >= 0) {
-            low = middle;
-        }
-        else {
-            high = middle - 1;
-        }
-    }
-
-    return low;
+    return xmrig::NativeTarget::difficulty(value, true);
 }
 
 
@@ -428,14 +390,19 @@ void xmrig::Client::parseNativeControl(const rapidjson::Value &message)
 bool xmrig::Client::parseNativeNotify(const rapidjson::Value &message)
 {
     const rapidjson::Value &params = Json::getValue(message, "params");
-    if (!params.IsArray()) {
-        return false;
-    }
-
     const char *algoName = Json::getString(message, "algo");
     Algorithm algorithm(algoName);
     if (!algorithm.isValid()) {
         algorithm = m_pool.algorithm();
+    }
+
+    if (algorithm == Algorithm::PEARLHASH && params.IsObject()) {
+        int code = -1;
+        return parseJob(params, &code, &message);
+    }
+
+    if (!params.IsArray()) {
+        return false;
     }
     if (!isNativeArrayAlgorithm(algorithm) || params.Empty()) {
         return false;
@@ -667,11 +634,13 @@ int64_t xmrig::Client::submitNative(const JobResult &result)
             return -1;
         }
 
-        if (params.HasMember("id")) {
-            params["id"].SetString(m_rpcId.data(), static_cast<SizeType>(m_rpcId.size()), allocator);
-        }
-        else {
-            params.AddMember("id", Value(m_rpcId.data(), static_cast<SizeType>(m_rpcId.size()), allocator), allocator);
+        if (result.algorithm != Algorithm::PEARLHASH) {
+            if (params.HasMember("id")) {
+                params["id"].SetString(m_rpcId.data(), static_cast<SizeType>(m_rpcId.size()), allocator);
+            }
+            else {
+                params.AddMember("id", Value(m_rpcId.data(), static_cast<SizeType>(m_rpcId.size()), allocator), allocator);
+            }
         }
     }
 

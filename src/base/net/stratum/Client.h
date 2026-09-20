@@ -70,7 +70,7 @@ public:
     /* MoneroOcean pools rate-limit login and pre-share getjob requests per source IP. */
     constexpr static uint64_t kUpstreamRequestWindow = 1000;
     constexpr static uint8_t kUpstreamRequestsPerWindow = 4;
-    constexpr static size_t kMaxSendBufferSize  = 1024 * 16;
+    constexpr static size_t kMaxSendBufferSize  = 256 * 1024;
 
     Client(int id, const char *agent, IClientListener *listener);
     ~Client() override;

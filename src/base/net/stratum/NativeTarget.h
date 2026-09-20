@@ -121,6 +121,45 @@ public:
         return true;
     }
 
+    // Return floor((2^256 - 1) / target), saturated to the proxy's 64-bit difficulty.
+    static uint64_t difficulty(const char *text, bool bigEndian)
+    {
+        UInt256 target = {};
+        if (!strictHex64Parse(text, target)) {
+            return 0;
+        }
+        if (!bigEndian) {
+            reverse(target);
+        }
+
+        bool nonzero = false;
+        for (const uint8_t byte : target) {
+            nonzero = nonzero || byte != 0;
+        }
+        if (!nonzero) {
+            return 0;
+        }
+
+        uint64_t low = 1;
+        uint64_t high = UINT64_MAX;
+        while (low < high) {
+            const uint64_t middle = low + (high - low + 1) / 2;
+            UInt256 quotient = {};
+            if (!max256DividedBy(middle, quotient)) {
+                return 0;
+            }
+
+            if (compareLex(quotient, target) >= 0) {
+                low = middle;
+            }
+            else {
+                high = middle - 1;
+            }
+        }
+
+        return low;
+    }
+
     // Return true when value <= target, using the canonical big-endian form.
     static bool meets(const UInt256 &value, const UInt256 &target)
     {

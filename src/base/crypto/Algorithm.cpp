@@ -109,6 +109,7 @@ const char *Algorithm::kAUTOLYKOS2      = "autolykos2";
 const char *Algorithm::kETHASH          = "ethash";
 const char *Algorithm::kETCHASH         = "etchash";
 const char *Algorithm::kC29             = "c29";
+const char *Algorithm::kPEARLHASH       = "pearlhash";
 
 #ifdef XMRIG_ALGO_GHOSTRIDER
 const char* Algorithm::kGHOSTRIDER      = "ghostrider";
@@ -191,6 +192,7 @@ static const std::map<uint32_t, const char *> kAlgorithmNames = {
     ALGO_NAME(ETHASH),
     ALGO_NAME(ETCHASH),
     ALGO_NAME(C29),
+    ALGO_NAME(PEARLHASH),
 
 #   ifdef XMRIG_ALGO_GHOSTRIDER
     ALGO_NAME(GHOSTRIDER_RTM),
@@ -329,6 +331,7 @@ static const std::map<const char *, Algorithm::Id, aliasCompare> kAlgorithmAlias
     ALGO_ALIAS_AUTO(C29),           ALGO_ALIAS(C29,              "cuckaroo"),
                                     ALGO_ALIAS(C29,              "cuckaroo29"),
                                     ALGO_ALIAS(C29,              "cuckarood29"),
+    ALGO_ALIAS_AUTO(PEARLHASH),
 
 #   ifdef XMRIG_ALGO_GHOSTRIDER
     ALGO_ALIAS_AUTO(GHOSTRIDER_RTM), ALGO_ALIAS(GHOSTRIDER_RTM, "ghostrider/rtm"),
@@ -414,7 +417,7 @@ std::vector<xmrig::Algorithm> xmrig::Algorithm::all(const std::function<bool(con
         RX_0, RX_V2, RX_WOW, RX_ARQ, RX_GRAFT, RX_SFX, RX_YADA, RX_XLA,
         /* MoneroOcean change: end */
         AR2_CHUKWA, AR2_CHUKWA_V2, AR2_WRKZ,
-        ASTROBWT_V2, AUTOLYKOS2, ETHASH, ETCHASH, C29,
+        ASTROBWT_V2, AUTOLYKOS2, ETHASH, ETCHASH, C29, PEARLHASH,
         KAWPOW_RVN,
         /* MoneroOcean change: begin Flex must be included in full algorithm iteration for config/help serialization paths. */
         GHOSTRIDER_RTM, FLEX_KCN
