@@ -100,7 +100,6 @@ public:
     inline const algo_perfs &get_algo_perfs() const               { return m_algoPerfs; }
     /* MoneroOcean change: end */
     inline ssize_t mapperId() const                               { return m_mapperId; }
-    inline bool nativeRemapRequired() const                       { return m_nativeRemapRequired; }
     inline State state() const                                    { return m_state; }
     inline uint16_t localPort() const                             { return m_localPort; }
     inline uint64_t customDiff() const                            { return m_customDiff; }
@@ -115,7 +114,6 @@ public:
     inline void setExtension(Extension ext, bool enable) noexcept { m_extensions.set(ext, enable); }
     inline void setFixedByte(uint8_t fixedByte)                   { m_fixedByte = fixedByte; }
     inline void setMapperId(ssize_t mapperId)                     { m_mapperId = mapperId; }
-    inline void clearNativeRemapRequired()                        { m_nativeRemapRequired = false; }
     inline void setRouteId(int32_t id)                            { m_routeId = id; }
 
 protected:
@@ -182,8 +180,6 @@ private:
     int64_t m_requestSequence = 0;
     int64_t m_subscribeId = 0;
     bool m_nativeProtocol = false;
-    bool m_pendingPearlAuthorize = false;
-    bool m_nativeRemapRequired = false;
 
     uint8_t m_viewTag       = 0;
     Tls *m_tls              = nullptr;
