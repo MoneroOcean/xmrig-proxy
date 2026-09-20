@@ -79,13 +79,19 @@ xmrig::Upstreams xmrig::NonceSplitter::upstreams() const
 
 void xmrig::NonceSplitter::connect()
 {
+    createMapper()->start();
+}
+
+
+xmrig::NonceMapper *xmrig::NonceSplitter::createMapper()
+{
     auto *upstream = new NonceMapper(m_upstreams.size(), m_controller);
     /* MoneroOcean change: begin Apply configured algo-perf grouping tolerance to new MoneroOcean upstream groups. */
     upstream->setAlgoPerfSameThreshold(m_controller->config()->algoPerfSameThreshold());
     /* MoneroOcean change: end */
     m_upstreams.push_back(upstream);
 
-    upstream->start();
+    return upstream;
 }
 
 
@@ -201,10 +207,15 @@ bool xmrig::NonceSplitter::assign(Miner *miner)
         /* MoneroOcean change: end */
     }
 
-    connect();
-    NonceMapper *mapper = m_upstreams.back();
+    NonceMapper *mapper = createMapper();
+    if (!mapper->add(miner)) {
+        m_upstreams.pop_back();
+        delete mapper;
+        return false;
+    }
 
-    return mapper->tryMiner(miner, m_upstreams.size()) && mapper->add(miner);
+    mapper->start();
+    return true;
 }
 
 

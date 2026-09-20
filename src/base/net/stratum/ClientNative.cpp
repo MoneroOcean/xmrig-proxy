@@ -391,6 +391,9 @@ bool xmrig::Client::parseNativeNotify(const rapidjson::Value &message)
 {
     const rapidjson::Value &params = Json::getValue(message, "params");
     const char *algoName = Json::getString(message, "algo");
+    if (!algoName && params.IsObject()) {
+        algoName = Json::getString(params, "algo");
+    }
     Algorithm algorithm(algoName);
     if (!algorithm.isValid()) {
         algorithm = m_pool.algorithm();

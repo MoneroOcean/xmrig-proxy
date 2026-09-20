@@ -160,6 +160,10 @@ bool xmrig::NonceMapper::tryMiner(const Miner *miner, int upstreamCount) const
 
     Client *upstream = client();
 
+    if (!m_storage->isUsed() && upstream && upstream->requiresPearlLogin(miner)) {
+        return false;
+    }
+
     return upstream == nullptr || upstream->tryMiner(miner, upstreamCount);
 }
 

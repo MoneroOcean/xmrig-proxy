@@ -71,6 +71,7 @@ protected:
 
 private:
     bool assign(Miner *miner);
+    NonceMapper *createMapper();
     void login(LoginEvent *event);
     void subscribe(SubscribeEvent *event);
     void remove(Miner *miner);

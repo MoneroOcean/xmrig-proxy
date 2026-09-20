@@ -388,6 +388,12 @@ bool xmrig::Client::tryMiner(const Miner *miner, int upstreamCount) const
 }
 
 
+bool xmrig::Client::requiresPearlLogin(const Miner *miner) const
+{
+    return AlgoSwitch::requiresPearlLogin(miner);
+}
+
+
 void xmrig::Client::addMiner(const Miner *miner)
 {
     AlgoSwitch::addMiner(miner);
@@ -944,6 +950,8 @@ void xmrig::Client::login()
 
     JsonRequest::create(doc, 1, "login", params);
 
+    m_pearlLogin = AlgoSwitch::hasAlgorithm(Algorithm::PEARLHASH);
+
     if (send(doc) < 0) {
         m_loginPending = true;
 
@@ -1329,7 +1337,7 @@ void xmrig::Client::parseResponse(int64_t id, const rapidjson::Value &result, co
         // Pearl's login dialect acknowledges authorization with a boolean and sends work in a
         // following object-form mining.notify. Keep an internal client ID; Pearl submits do not
         // place it on the wire.
-        if (m_pool.algorithm() == Algorithm::PEARLHASH && result.IsBool()) {
+        if (m_loginInFlight && m_pearlLogin && result.IsBool()) {
             m_loginInFlight = false;
             if (!result.GetBool()) {
                 close("login rejected");

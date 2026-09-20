@@ -49,6 +49,17 @@ class PearlLoginPool extends NativePool {
     }
 }
 
+class PearlSwitchPool extends PearlLoginPool {
+    onMessage(connection, message) {
+        const algos = message.params && message.params.algo;
+        if (message.method === "login" && (!Array.isArray(algos) || !algos.includes("pearlhash"))) {
+            return NativePool.prototype.onMessage.call(this, connection, message);
+        }
+
+        return super.onMessage(connection, message);
+    }
+}
+
 function jobMessage(message, id) {
     return message.method === "job" && message.params.job_id === id ||
         message.method === "mining.notify" && message.params[0] === id ||
@@ -425,6 +436,22 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
             assert.equal(pool.submits.length, 3);
         }, { poolFactory: timeout => new PearlLoginPool(timeout),
             proxyArgs: ["--algo=pearlhash"] });
+    });
+
+    test("first Pearl miner starts a capability-seeded upstream", async () => {
+        await withProxy(async ({ addMiner, pool }) => {
+            const capabilities = {
+                algos: ["pearlhash"],
+                perfs: { pearlhash: 1000 },
+                params: { extensions: ["mo-native"] }
+            };
+            await addMiner("pearl-switch", capabilities);
+            await pool.waitForLogins(2);
+
+            assert.deepEqual(pool.logins[1].message.params.algo, capabilities.algos);
+            assert.deepEqual(pool.logins[1].message.params["algo-perf"], capabilities.perfs);
+            assert.equal(pool.getjobs.length, 0);
+        }, { poolFactory: timeout => new PearlSwitchPool(timeout) });
     });
 
     test("negotiated native hashes use miner and pool targets without changing submit arrays", async () => {

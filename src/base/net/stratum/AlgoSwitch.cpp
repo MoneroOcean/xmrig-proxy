@@ -212,6 +212,27 @@ void AlgoSwitch::setSameThreshold(uint64_t percent)
 }
 
 
+bool AlgoSwitch::hasAlgorithm(const Algorithm::Id id) const
+{
+    const Algorithms &algos = m_algos.empty() ? m_defaultAlgos : m_algos;
+
+    return std::any_of(algos.begin(), algos.end(), [id](const Algorithm &algo) {
+        return algo.id() == id;
+    });
+}
+
+
+bool AlgoSwitch::requiresPearlLogin(const Miner *miner) const
+{
+    const MinerAlgoPerfData data = minerData(miner);
+    const bool offersPearl = std::any_of(data.first.begin(), data.first.end(), [](const Algorithm &algo) {
+        return algo == Algorithm::PEARLHASH;
+    });
+
+    return m_minerAlgoPerfs.empty() && offersPearl && intersection(m_defaultAlgos, data.first).empty();
+}
+
+
 bool AlgoSwitch::tryMiner(const Miner *miner, const int upstreamCount) const
 {
     if (m_minerAlgoPerfs.empty()) {
