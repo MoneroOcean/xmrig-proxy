@@ -202,10 +202,7 @@ bool Miner::parseNativeRequest(int64_t id, const char *method, const Value &para
             const char *wallet = Json::getString(params, "wallet");
             const char *worker = Json::getString(params, "worker");
             pass = Json::getString(params, "pass");
-            const char *agent = Json::getString(params, "agent");
-            const char *type = Json::getString(params, "type");
-            const bool srbPearl = !pass && agent && type && strcmp(type, Algorithm::kPEARLHASH) == 0;
-            if (wallet && worker && (pass || srbPearl)) {
+            if (wallet && worker) {
                 if (!pass) pass = "x";
                 objectUser = wallet;
                 if (*worker) objectUser += std::string(".") + worker;

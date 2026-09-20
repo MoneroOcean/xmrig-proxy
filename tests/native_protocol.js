@@ -222,7 +222,7 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
             proxyArgs: ["--algo=pearlhash"] });
     });
 
-    test("SRBMiner object authorization receives native Pearl work without a password", async () => {
+    test("object authorization defaults an omitted password to x", async () => {
         await withProxy(async ({ miners, proxyPort, config, pool }) => {
             const miner = new FakeMiner("srb-pearl", proxyPort, config.timeoutMs);
             miners.push(miner);
@@ -231,9 +231,8 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
             const subscription = await miner.peer.waitForMessage(message => message.id === 1,
                 config.timeoutMs, "SRBMiner subscription");
             assert.equal(subscription.error, null);
-            miner.peer.send({ id: 2, method: "mining.authorize", params: {
-                wallet: "srb-wallet", worker: "rig", agent: "SRBMiner-MULTI/3.6.7", type: "pearlhash"
-            } });
+            miner.peer.send({ id: 2, method: "mining.authorize",
+                params: { wallet: "srb-wallet", worker: "rig" } });
             const authorization = await miner.peer.waitForMessage(message => message.id === 2,
                 config.timeoutMs, "SRBMiner authorization");
             assert.equal(authorization.error, null);
@@ -242,24 +241,6 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
                 config.timeoutMs, "SRBMiner Pearl job");
             assert.match(job.params.job_id, /^login-pearl-/);
             assert.equal(pool.logins.at(-1).message.params.pass, "x");
-        }, { poolFactory: timeout => new PearlLoginPool(timeout),
-            proxyArgs: ["--algo=pearlhash"] });
-    });
-
-    test("object authorization without a password rejects non-Pearl types", async () => {
-        await withProxy(async ({ miners, proxyPort, config }) => {
-            const miner = new FakeMiner("object-no-pass", proxyPort, config.timeoutMs);
-            miners.push(miner);
-            await miner.connect();
-            miner.peer.send({ id: 1, method: "mining.subscribe", params: ["SRBMiner-MULTI/3.6.7"] });
-            await miner.peer.waitForMessage(message => message.id === 1,
-                config.timeoutMs, "object subscription");
-            miner.peer.send({ id: 2, method: "mining.authorize", params: {
-                wallet: "object-wallet", worker: "rig", agent: "SRBMiner-MULTI/3.6.7", type: "kawpow"
-            } });
-            const authorization = await miner.peer.waitForMessage(message => message.id === 2,
-                config.timeoutMs, "object authorization rejection");
-            assert.ok(authorization.error);
         }, { poolFactory: timeout => new PearlLoginPool(timeout),
             proxyArgs: ["--algo=pearlhash"] });
     });
