@@ -934,7 +934,11 @@ void xmrig::Client::login()
     params.AddMember("pass",  m_password.toJSON(), allocator);
     params.AddMember("agent", StringRef(m_agent),  allocator);
     /* MoneroOcean change: begin Advertise normalized miner algo/algo-perf capabilities so MoneroOcean can choose compatible work. */
-    params.AddMember("algo", AlgoSwitch::algosToJSON(doc), allocator);
+    Value algos = AlgoSwitch::algosToJSON(doc);
+    m_pearlLogin = std::any_of(algos.Begin(), algos.End(), [](const Value &algo) {
+        return algo.IsString() && strcmp(algo.GetString(), Algorithm::kPEARLHASH) == 0;
+    });
+    params.AddMember("algo", algos, allocator);
     params.AddMember("algo-perf", AlgoSwitch::algoPerfsToJSON(doc), allocator);
     Value extensions(kArrayType);
     extensions.PushBack("mo-native", allocator);
@@ -949,8 +953,6 @@ void xmrig::Client::login()
     m_listener->onLogin(this, doc, params);
 
     JsonRequest::create(doc, 1, "login", params);
-
-    m_pearlLogin = AlgoSwitch::hasAlgorithm(Algorithm::PEARLHASH);
 
     if (send(doc) < 0) {
         m_loginPending = true;

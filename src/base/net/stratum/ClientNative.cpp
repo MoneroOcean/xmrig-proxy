@@ -396,12 +396,20 @@ bool xmrig::Client::parseNativeNotify(const rapidjson::Value &message)
     }
     Algorithm algorithm(algoName);
     if (!algorithm.isValid()) {
-        algorithm = m_pool.algorithm();
+        algorithm = m_pearlLogin && params.IsObject() ? Algorithm(Algorithm::PEARLHASH) : m_pool.algorithm();
     }
 
     if (algorithm == Algorithm::PEARLHASH && params.IsObject()) {
         int code = -1;
-        return parseJob(params, &code, &message);
+        if (params.HasMember("algo")) {
+            return parseJob(params, &code, &message);
+        }
+
+        rapidjson::Document tagged;
+        tagged.CopyFrom(params, tagged.GetAllocator());
+        tagged.AddMember("algo", rapidjson::StringRef(Algorithm::kPEARLHASH), tagged.GetAllocator());
+
+        return parseJob(tagged, &code, &message);
     }
 
     if (!params.IsArray()) {

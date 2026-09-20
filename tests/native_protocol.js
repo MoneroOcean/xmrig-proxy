@@ -56,6 +56,15 @@ class PearlSwitchPool extends PearlLoginPool {
             return NativePool.prototype.onMessage.call(this, connection, message);
         }
 
+        if (message.method === "login") {
+            this.logins.push({ connection, message });
+            connection.peer.send({ id: message.id, error: null, result: true });
+            const notify = fixture("pearlhash", `switch-pearl-${++this.jobSeq}`).at(-1);
+            delete notify.params.algo;
+            connection.peer.send({ ...notify, method: "mining.notify" });
+            return;
+        }
+
         return super.onMessage(connection, message);
     }
 }

@@ -212,16 +212,6 @@ void AlgoSwitch::setSameThreshold(uint64_t percent)
 }
 
 
-bool AlgoSwitch::hasAlgorithm(const Algorithm::Id id) const
-{
-    const Algorithms &algos = m_algos.empty() ? m_defaultAlgos : m_algos;
-
-    return std::any_of(algos.begin(), algos.end(), [id](const Algorithm &algo) {
-        return algo.id() == id;
-    });
-}
-
-
 bool AlgoSwitch::requiresPearlLogin(const Miner *miner) const
 {
     const MinerAlgoPerfData data = minerData(miner);
