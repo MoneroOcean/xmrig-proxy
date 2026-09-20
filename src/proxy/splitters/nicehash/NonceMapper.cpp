@@ -126,16 +126,17 @@ bool xmrig::NonceMapper::add(Miner *miner)
         m_nativeC29 = true;
     }
 
-    if (isSuspended()) {
-        connect();
-    }
-
     /* MoneroOcean change: begin Add miner capabilities to normal upstream clients and refresh MoneroOcean work with getjob. */
     if (Client *upstream = client()) {
         upstream->addMiner(miner);
     }
     if (Client *donate = donateClient()) {
         donate->addMiner(miner);
+    }
+    // Seed a reused idle client before reconnecting so its login advertises the new group directly;
+    // reconnecting first can race an unsupported default-algorithm getjob ahead of this update.
+    if (isSuspended()) {
+        connect();
     }
     /* MoneroOcean change: end */
     return true;
