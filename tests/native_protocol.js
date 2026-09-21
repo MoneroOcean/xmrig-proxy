@@ -465,6 +465,7 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
             const initial = await miner.peer.waitForMessage(pearlJobMessage,
                 miner.timeoutMs, "initial Pearl job delivery");
             const job = initial.params;
+            assert.deepEqual(job.proof_encodings, ["none", "gzip"]);
             const claim = {
                 job_id: job.job_id,
                 plain_proof: "cHJvb2Y=",

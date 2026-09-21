@@ -45,7 +45,8 @@ function fixture(algo, id, profile, upstreamId) {
     }
     if (algo === "pearlhash") {
         delete base.params.blob;
-        Object.assign(base.params, { header: "56".repeat(76), target: target(10000), cert_version: 3 });
+        Object.assign(base.params, { header: "56".repeat(76), target: target(10000), cert_version: 3,
+            proof_encodings: ["none", "gzip"] });
     }
     return [base];
 }
