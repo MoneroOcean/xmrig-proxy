@@ -468,6 +468,7 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
             const claim = {
                 job_id: job.job_id,
                 plain_proof: "cHJvb2Y=",
+                proof_encoding: "gzip",
                 jackpot: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
                 adjustment_factor: 524288
             };
