@@ -72,6 +72,7 @@ public:
         EXT_NATIVE,
         EXT_SUBMIT_RESULT,
         EXT_BOOL_SUBMIT,
+        EXT_PEARL_SEED_SPLIT,
         EXT_MAX
     };
 

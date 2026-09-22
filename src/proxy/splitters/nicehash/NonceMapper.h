@@ -112,6 +112,7 @@ private:
     void suspend();
 
     bool hasNativeC29(const Miner *miner) const;
+    bool hasNativePearl(const Miner *miner) const;
 
     Controller *m_controller;
     DonateStrategy *m_donate    = nullptr;
@@ -121,6 +122,7 @@ private:
     NonceStorage *m_storage;
     size_t m_id;
     bool m_nativeC29 = false;
+    bool m_nativePearl = false;
     std::map<int64_t, SubmitCtx> m_results;
 };
 

@@ -100,10 +100,17 @@ bool xmrig::NonceMapper::add(Miner *miner)
     if (!alreadyMapped && (m_nativeC29 || (candidateC29 && m_storage->isUsed()))) {
         return false;
     }
+    const bool candidatePearl = hasNativePearl(miner);
+    if (!alreadyMapped && (m_nativePearl || (candidatePearl && m_storage->isUsed()))) {
+        return false;
+    }
 
     if (alreadyMapped) {
         if (candidateC29) {
             m_nativeC29 = true;
+        }
+        if (candidatePearl) {
+            m_nativePearl = true;
         }
 
         return true;
@@ -124,6 +131,9 @@ bool xmrig::NonceMapper::add(Miner *miner)
 
     if (candidateC29) {
         m_nativeC29 = true;
+    }
+    if (candidatePearl) {
+        m_nativePearl = true;
     }
 
     /* MoneroOcean change: begin Add miner capabilities to normal upstream clients and refresh MoneroOcean work with getjob. */
@@ -154,6 +164,10 @@ bool xmrig::NonceMapper::tryMiner(const Miner *miner, int upstreamCount) const
     if (!alreadyMapped) {
         const bool candidateC29 = hasNativeC29(miner);
         if (m_nativeC29 || (candidateC29 && m_storage->isUsed())) {
+            return false;
+        }
+        const bool candidatePearl = hasNativePearl(miner);
+        if (m_nativePearl || (candidatePearl && m_storage->isUsed())) {
             return false;
         }
     }
@@ -233,6 +247,7 @@ void xmrig::NonceMapper::remove(const Miner *miner)
     m_storage->remove(miner);
     if (!m_storage->isUsed()) {
         m_nativeC29 = false;
+        m_nativePearl = false;
     }
     /* MoneroOcean change: begin Remove miner capabilities so upstream getjob reflects the remaining MoneroOcean group. */
     if (Client *upstream = client()) {
@@ -467,6 +482,7 @@ void xmrig::NonceMapper::suspend()
     m_storage->setActive(false);
     m_storage->reset();
     m_nativeC29 = false;
+    m_nativePearl = false;
     m_strategy->stop();
 
     if (m_donate) {
@@ -477,12 +493,28 @@ void xmrig::NonceMapper::suspend()
 
 bool xmrig::NonceMapper::hasNativeC29(const Miner *miner) const
 {
-    if (!miner || !miner->hasExtension(Miner::EXT_NATIVE)) {
+    if (!miner || !miner->hasExtension(Miner::EXT_NATIVE) || miner->hasExtension(Miner::EXT_SUBMIT_RESULT)) {
         return false;
     }
 
     for (const Algorithm &algorithm : miner->get_algos()) {
         if (algorithm == Algorithm::C29) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+bool xmrig::NonceMapper::hasNativePearl(const Miner *miner) const
+{
+    if (!miner || !miner->hasExtension(Miner::EXT_NATIVE) || miner->hasExtension(Miner::EXT_PEARL_SEED_SPLIT)) {
+        return false;
+    }
+
+    for (const Algorithm &algorithm : miner->get_algos()) {
+        if (algorithm == Algorithm::PEARLHASH) {
             return true;
         }
     }

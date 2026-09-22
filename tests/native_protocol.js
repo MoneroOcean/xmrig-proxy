@@ -624,7 +624,7 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
                 const id = `proof-${profile}`;
                 const job = (await pushAndReceive(pool, miner, "c29", id, profile)).params;
                 const pow = Array.from({ length: job.proofsize }, (_, index) => index + 1);
-                const nonce = profile === "xtmc" ? job.xn.padEnd(16, "0") : 7;
+                const nonce = profile === "xtmc" ? job.xn.padEnd(16, "0") : job.nonce + 7;
                 miner.peer.send({ id, method: "submit", params: { id: login.result.id, job_id: id,
                     algo: "c29", nonce, pow, result: Buffer.from(target(20000), "hex").reverse().toString("hex") } });
                 const reply = await miner.peer.waitForMessage(message => message.id === id, config.timeoutMs, `${profile} proof`);

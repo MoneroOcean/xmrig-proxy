@@ -42,6 +42,20 @@ String targetHex(uint64_t diff) {
     NativeTarget::toHex64(target, hex, sizeof(hex));
     return String(hex, 64);
 }
+bool multiplyTarget(const NativeTarget::UInt256 &target, uint32_t factor, NativeTarget::UInt256 &scaled) {
+    uint64_t carry = 0;
+    for (size_t i = target.size(); i-- > 0;) {
+        const uint64_t product = static_cast<uint64_t>(target[i]) * factor + carry;
+        scaled[i] = static_cast<uint8_t>(product);
+        carry = product >> 8;
+    }
+    return carry == 0;
+}
+bool jackpotMeets(const NativeTarget::UInt256 &jackpot, const NativeTarget::UInt256 &target, uint32_t factor, bool saturateOverflow) {
+    NativeTarget::UInt256 scaled{};
+    if (!multiplyTarget(target, factor, scaled)) return saturateOverflow;
+    return NativeTarget::meets(jackpot, scaled);
+}
 String targetDecimal(uint64_t diff) {
     NativeTarget::UInt256 value{};
     NativeTarget::max256DividedBy(diff, value);
@@ -118,18 +132,26 @@ void Miner::rememberJob(const Job &job) {
     m_diff = job.diff();
 }
 uint64_t Miner::assignedDiff(const Job &job) const {
-    if (job.algorithm() == Algorithm::PEARLHASH ||
+    if ((job.algorithm() == Algorithm::PEARLHASH && !hasExtension(EXT_PEARL_SEED_SPLIT)) ||
         ((arrayJob(job) || job.algorithm() == Algorithm::C29) && !hasExtension(EXT_SUBMIT_RESULT))) return job.diff();
     return m_customDiff ? std::min(m_customDiff, job.diff()) : job.diff();
 }
 String Miner::assignedPrefix(const Job &job) const {
-    if (job.nativePrefix().isEmpty()) return {};
-    std::string prefix(job.nativePrefix().data());
-    if (hasExtension(EXT_NICEHASH) && job.algorithm() != Algorithm::C29) {
+    std::string prefix;
+    if (!job.nativePrefix().isEmpty()) prefix.assign(job.nativePrefix().data());
+    if (hasExtension(EXT_NICEHASH) && job.algorithm() == Algorithm::C29 &&
+        hasExtension(EXT_SUBMIT_RESULT) && job.nonceSize() == 8) {
         char slot[3];
         snprintf(slot, sizeof(slot), "%02x", m_fixedByte);
         prefix += slot;
     }
+    else if (hasExtension(EXT_NICEHASH) && job.algorithm() != Algorithm::C29) {
+        if (prefix.empty()) return {};
+        char slot[3];
+        snprintf(slot, sizeof(slot), "%02x", m_fixedByte);
+        prefix += slot;
+    }
+    if (prefix.empty()) return {};
     return prefix.c_str();
 }
 void Miner::sendSubscription() {
@@ -267,6 +289,12 @@ void Miner::sendNative(const Job &job) {
         if (job.algorithm() == Algorithm::KAWPOW_RVN) params[3].SetString(targetHex(diff).data(), a);
         else if (job.algorithm() == Algorithm::AUTOLYKOS2) params[6].SetString(targetDecimal(diff).data(), a);
         else if (!nativeArray && params.HasMember("difficulty")) params["difficulty"].SetUint64(diff);
+        else if (!nativeArray && job.algorithm() == Algorithm::PEARLHASH &&
+                 hasExtension(EXT_PEARL_SEED_SPLIT) && params.HasMember("target") &&
+                 params["target"].IsString() && params["target"].GetStringLength() == 64) {
+            const String target = targetHex(diff);
+            params["target"].SetString(target.data(), a);
+        }
         else if (!nativeArray && params.HasMember("target")) {
             const size_t bytes = strlen(params["target"].GetString()) / 2;
             uint64_t t = UINT64_MAX / diff;
@@ -276,7 +304,28 @@ void Miner::sendNative(const Job &job) {
             params["target"].SetString(target.data(), a);
         }
     }
-    if (!nativeArray && job.nonceSize() == 8 && !prefix.isEmpty() && params.HasMember("xn")) params["xn"].SetString(prefix.data(), a);
+    if (!nativeArray && job.algorithm() == Algorithm::C29 && hasExtension(EXT_SUBMIT_RESULT) &&
+        job.nonceSize() == 4 && params.IsObject()) {
+        const uint32_t nonce = static_cast<uint32_t>(m_fixedByte) << 24;
+        if (params.HasMember("nonce")) params["nonce"].SetUint(nonce);
+        else params.AddMember("nonce", nonce, a);
+        if (params.HasMember("nicehash_mask")) params["nicehash_mask"].SetUint(0xff000000U);
+        else params.AddMember("nicehash_mask", 0xff000000U, a);
+    }
+    if (!nativeArray && job.algorithm() == Algorithm::PEARLHASH && hasExtension(EXT_PEARL_SEED_SPLIT) && params.IsObject()) {
+        if (params.HasMember("nonce_slot")) params["nonce_slot"].SetUint(m_fixedByte);
+        else params.AddMember("nonce_slot", m_fixedByte, a);
+        if (params.HasMember("nonce_stride")) params["nonce_stride"].SetUint(256);
+        else params.AddMember("nonce_stride", 256, a);
+    }
+    if (!nativeArray && job.algorithm() == Algorithm::C29 && hasExtension(EXT_SUBMIT_RESULT) &&
+        job.nonceSize() == 8 && !prefix.isEmpty() && params.IsObject()) {
+        if (params.HasMember("xn")) params["xn"].SetString(prefix.data(), a);
+        else params.AddMember("xn", prefix.toJSON(), a);
+    }
+    else if (!nativeArray && job.nonceSize() == 8 && !prefix.isEmpty() && params.HasMember("xn")) {
+        params["xn"].SetString(prefix.data(), a);
+    }
     if (!nativeArray && job.nonceSize() == 4 && job.algorithm() != Algorithm::C29 && hasExtension(EXT_NICEHASH) && params.HasMember("blob")) {
         std::string blob(params["blob"].GetString());
         char slot[3]; snprintf(slot, sizeof(slot), "%02x", m_fixedByte);
@@ -297,6 +346,7 @@ void Miner::sendNative(const Job &job) {
             extensions.PushBack("algo", r); extensions.PushBack("mo-native", r); extensions.PushBack("keepalive", r);
             if (hasExtension(EXT_NICEHASH)) extensions.PushBack("nicehash", r);
             if (hasExtension(EXT_SUBMIT_RESULT)) extensions.PushBack("submit-result", r);
+            if (hasExtension(EXT_PEARL_SEED_SPLIT)) extensions.PushBack("pearl-seed-split", r);
             result.AddMember("extensions", extensions, r);
             if (!nativeArray) result.AddMember("job", Value().CopyFrom(params, r), r);
             replyResult(m_loginId, result);
@@ -360,6 +410,8 @@ bool Miner::submitJob(int64_t id, const Value &params, const Value *native) {
     const bool hashRequired = !pearl && ((!nativeArray && job->algorithm() != Algorithm::C29) || hasExtension(EXT_SUBMIT_RESULT));
     NativeTarget::UInt256 hashBytes{};
     if ((hashRequired || hash) && (!hash || strlen(hash) != 64 || !NativeTarget::strictHex64Parse(hash, hashBytes))) return reject(Error::LowDifficulty);
+    NativeTarget::UInt256 pearlJackpot{};
+    uint32_t pearlFactor = 0;
     if (pearl) {
         const char *proof = Json::getString(params, "plain_proof");
         const char *jackpot = Json::getString(params, "jackpot");
@@ -372,6 +424,12 @@ bool Miner::submitJob(int64_t id, const Value &params, const Value *native) {
             for (const char *p = jackpot; *p; ++p) {
                 if (!((*p >= '0' && *p <= '9') || (*p >= 'a' && *p <= 'f'))) return reject(Error::LowDifficulty);
             }
+            if (!NativeTarget::strictHex64Parse(jackpot, pearlJackpot)) return reject(Error::LowDifficulty);
+            NativeTarget::reverse(pearlJackpot);
+            pearlFactor = factor.GetUint();
+        }
+        if (hasExtension(EXT_PEARL_SEED_SPLIT) && (!hasJackpot || !hasFactor)) {
+            return reject(Error::LowDifficulty);
         }
     }
     std::string nonce;
@@ -386,6 +444,7 @@ bool Miner::submitJob(int64_t id, const Value &params, const Value *native) {
     if (!pearl) {
         if (width > 8 || nonce.size() != width * 2 || !Cvt::fromHex(nonceBytes, width, nonce.c_str(), nonce.size())) return reject(Error::InvalidNonce);
         if (width == 8 && (prefix.isEmpty() || nonce.compare(0, prefix.size(), hexNonce(prefix.data())) != 0)) return reject(Error::InvalidNonce);
+        if (width == 4 && job->algorithm() == Algorithm::C29 && hasExtension(EXT_SUBMIT_RESULT) && nonceBytes[0] != m_fixedByte) return reject(Error::InvalidNonce);
         if (width == 4 && job->algorithm() != Algorithm::C29 && hasExtension(EXT_NICEHASH) && nonceBytes[3] != m_fixedByte) return reject(Error::InvalidNonce);
     }
     if (job->algorithm() == Algorithm::C29) {
@@ -402,7 +461,23 @@ bool Miner::submitJob(int64_t id, const Value &params, const Value *native) {
     }
     const uint64_t minerDiff = assignedDiff(*job);
     if (hashRequired && !job->nativeHashMeetsDifficulty(hash, minerDiff)) return reject(Error::LowDifficulty);
-    const bool poolShare = !hashRequired || (job->nativeTarget().isEmpty() ? job->nativeHashMeetsDifficulty(hash, job->diff()) : job->nativeHashMeetsTarget(hash));
+    bool poolShare = !hashRequired || (job->nativeTarget().isEmpty() ? job->nativeHashMeetsDifficulty(hash, job->diff()) : job->nativeHashMeetsTarget(hash));
+    if (pearl && hasExtension(EXT_PEARL_SEED_SPLIT)) {
+        NativeTarget::UInt256 localTarget{};
+        NativeTarget::UInt256 upstreamTarget{};
+        if (!NativeTarget::max256DividedBy(minerDiff, localTarget) || job->nativeTarget().isEmpty() ||
+            !NativeTarget::strictHex64Parse(job->nativeTarget().data(), upstreamTarget) ||
+            !jackpotMeets(pearlJackpot, localTarget, pearlFactor, true)) {
+            return reject(Error::LowDifficulty);
+        }
+        if (!jackpotMeets(pearlJackpot, upstreamTarget, pearlFactor, false)) {
+            success(id, "OK");
+            SubmitResult accepted(1, job->diff(), 0, id, 0);
+            accepted.assignedDiff = minerDiff;
+            AcceptEvent::start(m_mapperId, this, accepted, false, true);
+            return true;
+        }
+    }
     uint64_t actualDiff = 0;
     if (hash) {
         if (!arrayJob(*job)) NativeTarget::reverse(hashBytes);

@@ -257,6 +257,7 @@ bool xmrig::Miner::parseRequest(int64_t id, const char *method, const rapidjson:
                 if (!extension.IsString()) continue;
                 if (strcmp(extension.GetString(), "mo-native") == 0) setExtension(EXT_NATIVE, true);
                 if (strcmp(extension.GetString(), "submit-result") == 0) setExtension(EXT_SUBMIT_RESULT, true);
+                if (strcmp(extension.GetString(), "pearl-seed-split") == 0) setExtension(EXT_PEARL_SEED_SPLIT, true);
             }
 
             Algorithms algorithms;
