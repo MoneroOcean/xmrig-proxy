@@ -118,6 +118,9 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
                 const id = `layout-${algo}`;
                 const received = await pushAndReceive(pool, miner, algo, id);
                 const expected = fixture(algo, id).at(-1);
+                if (algo === "autolykos2") {
+                    expected.params[6] = (BigInt("0x" + target(1500))).toString();
+                }
                 assert.equal(received.method, expected.method, algo);
                 if (Array.isArray(expected.params)) {
                     assert.equal(received.algo, algo);
@@ -367,6 +370,10 @@ test.describe("native MoneroOcean algorithms", { concurrency: false }, () => {
                     message => message.method === "mining.set_extranonce" && message.algo === algo,
                     config.timeoutMs, `${algo} MO-native extranonce`);
                 assert.deepEqual(extranonce.params, [login.result.extra_nonce, 5]);
+                const control = await miner.peer.waitForMessage(
+                    message => message.method === "mining.set_difficulty" && message.algo === algo,
+                    config.timeoutMs, `${algo} MO-native local difficulty`);
+                assert.deepEqual(control.params, [1500 / 0x100000000]);
             }, {
                 poolFactory: timeout => new FixedNativePool(timeout, algo),
                 proxyArgs: [`--algo=${algo}`]

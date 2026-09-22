@@ -18,6 +18,7 @@ const C29_PERFS = Object.assign({}, GPU_PERFS, { c29: 500 });
 const SUPPORTED_ALGOS = [...C29_ALGOS, "pearlhash"];
 const NATIVE_ARRAY_ALGOS = new Set(["kawpow1", "etchash", "autolykos2"]);
 const UPSTREAM_EXTENSIONS = ["algo", "keepalive", "mo-native", "submit-result"];
+const AUTO_LOCAL_DIFF = 1500;
 
 function wireAlgorithm(algo) {
     if (algo === "kawpow1") return "kawpow";
@@ -304,8 +305,8 @@ test("submit-result C29 miners aggregate with distinct Grin and Xtmc nonce parti
             perfs: { c29: 100 },
             extensions: ["mo-native", "submit-result"]
         };
-        const first = await openNativeMiner({ miners, proxyPort, config }, "c29-result-first+1000", capabilities);
-        const second = await openNativeMiner({ miners, proxyPort, config }, "c29-result-second+1000", capabilities);
+        const first = await openNativeMiner({ miners, proxyPort, config }, "c29-result-first", capabilities);
+        const second = await openNativeMiner({ miners, proxyPort, config }, "c29-result-second", capabilities);
         await pool.waitForGetjobs(1);
         const c29Requests = pool.getjobs.filter(request => request.algorithm === "c29");
         assert.ok(c29Requests.length >= 1, "submit-result C29 work was not requested");
@@ -322,7 +323,8 @@ test("submit-result C29 miners aggregate with distinct Grin and Xtmc nonce parti
             assert.ok((params.nonce >>> 24) >= 0 && (params.nonce >>> 24) < 256,
                 "C29 Grin nonce does not carry a fixed slot");
             assert.equal(params.nicehash_mask, 0xff000000, "C29 Grin mask was not advertised");
-            assert.equal(params.difficulty, 1000, "C29 result miner did not receive its custom difficulty");
+            assert.equal(params.difficulty, AUTO_LOCAL_DIFF,
+                "C29 result miner did not receive its measured local difficulty");
         }
 
         const xtmcId = "c29-result-xtmc";
@@ -386,6 +388,39 @@ test("submit-result C29 miners aggregate with distinct Grin and Xtmc nonce parti
     }, { poolFactory: timeout => new SwitchingNativePool(timeout) });
 });
 
+test("measured native GPU jobs receive bounded automatic local difficulty", async () => {
+    for (const algorithm of ["kawpow1", "etchash", "autolykos2"]) {
+        await withProxy(async ({ miners, proxyPort, config, pool }) => {
+            const handle = await openNativeMiner({ miners, proxyPort, config }, `auto-diff-${algorithm}`, {
+                algos: [algorithm], perfs: { [algorithm]: 100 },
+                extensions: ["mo-native", "submit-result"]
+            });
+            await pool.waitForGetjobs(1);
+            const request = pool.getjobs.at(-1);
+            assert.equal(request.algorithm, algorithm);
+            const id = `auto-diff-${algorithm}-job`;
+            pool.pushMatchingJob(request.connection, algorithm, id);
+            const [, job] = await Promise.all([
+                waitForNativeLogin(handle, algorithm, config.timeoutMs),
+                waitForNativeJob(handle, algorithm, id, config.timeoutMs)
+            ]);
+            if (algorithm === "kawpow1") {
+                assert.equal(job.params[3], target(AUTO_LOCAL_DIFF));
+            }
+            else if (algorithm === "etchash") {
+                const control = await handle.miner.peer.waitForMessage(
+                    message => message.method === "mining.set_difficulty" && message.algo === "etchash" &&
+                        message.params[0] !== 10000 / 0x100000000,
+                    config.timeoutMs, "Etchash automatic local difficulty");
+                assert.deepEqual(control.params, [AUTO_LOCAL_DIFF / 0x100000000]);
+            }
+            else {
+                assert.equal(job.params[6], (BigInt("0x" + target(AUTO_LOCAL_DIFF))).toString());
+            }
+        }, { poolFactory: timeout => new SwitchingNativePool(timeout) });
+    }
+});
+
 test("Pearl seed-split miners share an upstream with distinct nonce slots across Pearl switches", async () => {
     await withProxy(async ({ miners, proxyPort, config, pool }) => {
         const pearlCapabilities = {
@@ -420,6 +455,8 @@ test("Pearl seed-split miners share an upstream with distinct nonce slots across
         const initialParams = initialJobs.map(nativeJobParams);
         assert.notEqual(initialParams[0].nonce_slot, initialParams[1].nonce_slot, "supporting Pearl miners reused a nonce slot");
         for (const params of initialParams) {
+            assert.equal(params.target, target(AUTO_LOCAL_DIFF),
+                "Pearl miner did not receive its measured local target");
             assert.equal(Number.isInteger(params.nonce_slot), true, "Pearl nonce slot is not an integer");
             assert.ok(params.nonce_slot >= 0 && params.nonce_slot < 256, "Pearl nonce slot is outside the fixed-byte range");
             assert.equal(params.nonce_stride, 256, "Pearl nonce stride is not 256");

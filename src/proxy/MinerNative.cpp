@@ -11,8 +11,10 @@
 #include "3rdparty/rapidjson/stringbuffer.h"
 #include "3rdparty/rapidjson/writer.h"
 #include <algorithm>
-#include <cstring>
 #include <cctype>
+#include <cmath>
+#include <cstring>
+#include <limits>
 #include <string>
 
 using namespace rapidjson;
@@ -134,7 +136,29 @@ void Miner::rememberJob(const Job &job) {
 uint64_t Miner::assignedDiff(const Job &job) const {
     if ((job.algorithm() == Algorithm::PEARLHASH && !hasExtension(EXT_PEARL_SEED_SPLIT)) ||
         ((arrayJob(job) || job.algorithm() == Algorithm::C29) && !hasExtension(EXT_SUBMIT_RESULT))) return job.diff();
-    return m_customDiff ? std::min(m_customDiff, job.diff()) : job.diff();
+    if (m_customDiff) return std::min(m_customDiff, job.diff());
+
+    const auto algorithm = job.algorithm();
+    const bool autoLocalDiff =
+        (algorithm == Algorithm::PEARLHASH && hasExtension(EXT_PEARL_SEED_SPLIT)) ||
+        (hasExtension(EXT_SUBMIT_RESULT) &&
+         (algorithm == Algorithm::KAWPOW_RVN || algorithm == Algorithm::ETHASH ||
+          algorithm == Algorithm::ETCHASH || algorithm == Algorithm::AUTOLYKOS2 ||
+          algorithm == Algorithm::C29));
+    const auto measured = m_algoPerfs.find(algorithm.id());
+    if (!autoLocalDiff || measured == m_algoPerfs.end() ||
+        !std::isfinite(measured->second) || measured->second <= 0.0F) return job.diff();
+
+    // Aim for one local result about every 15 seconds. Never make a pool job more than 256 times
+    // easier: that is the number of disjoint nonce slots available to one aggregated upstream.
+    constexpr long double interval = 15.0L;
+    constexpr uint64_t slots = 256;
+    const long double desired = std::ceil(static_cast<long double>(measured->second) * interval);
+    const uint64_t measuredDiff = desired >= std::numeric_limits<uint64_t>::max()
+        ? std::numeric_limits<uint64_t>::max()
+        : std::max<uint64_t>(1, static_cast<uint64_t>(desired));
+    const uint64_t slotFloor = job.diff() / slots + (job.diff() % slots != 0);
+    return std::min(job.diff(), std::max(measuredDiff, slotFloor));
 }
 String Miner::assignedPrefix(const Job &job) const {
     std::string prefix;

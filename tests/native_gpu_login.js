@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const { CAPABILITIES, FakeMiner, FakePool, delay, waitFor, withProxy } = require("./common/proxy_harness.js");
-const { fixture } = require("./common/native_fixtures.js");
+const { fixture, target } = require("./common/native_fixtures.js");
 
 class GpuOnlyPool extends FakePool {
     constructor(timeoutMs) {
@@ -298,6 +298,20 @@ const scenarios = [
     { requested: "autolykos2", algorithm: "autolykos2", control: "mining.set_difficulty", occupiedCpu: true }
 ];
 
+function expectedGpuMessages(pool, algorithm) {
+    const control = [...pool.nativeMessages[0].params];
+    const notify = [...pool.nativeMessages[1].params];
+    // With a reported rate of one, the 256-slot safety floor sets a 10,000-difficulty job to 40.
+    if (algorithm === "kawpow") {
+        control[0] = target(40);
+        notify[3] = target(40);
+    }
+    else {
+        notify[6] = BigInt("0x" + target(40)).toString();
+    }
+    return { control, notify };
+}
+
 for (const scenario of scenarios) {
     test(`${scenario.occupiedCpu ? "active CPU miner" : "default proxy"} forwards GPU-only ${scenario.requested} native login`, async () => {
         await withProxy(async ({ addMiner, miners, proxyPort, config, pool }) => {
@@ -351,12 +365,13 @@ for (const scenario of scenarios) {
             const control = await miner.peer.waitForMessage(message =>
                 message.method === scenario.control && message.algo === scenario.algorithm,
                 config.timeoutMs, `${scenario.requested} control`);
-            assert.deepEqual(control.params, pool.nativeMessages[0].params);
+            const expected = expectedGpuMessages(pool, scenario.algorithm);
+            assert.deepEqual(control.params, expected.control);
 
             const notify = await miner.peer.waitForMessage(message =>
                 message.method === "mining.notify" && message.algo === scenario.algorithm,
                 config.timeoutMs, `${scenario.requested} notify`);
-            assert.deepEqual(notify.params, pool.nativeMessages[1].params);
+            assert.deepEqual(notify.params, expected.notify);
             if (scenario.algorithm === "kawpow") {
                 assert.equal(notify.params[6], "1d00ffff");
             }
@@ -408,11 +423,12 @@ for (const scenario of [
             const control = await miner.peer.waitForMessage(message =>
                 message.method === scenario.control && message.algo === scenario.algorithm,
                 config.timeoutMs, `${scenario.requested} delayed control`);
-            assert.deepEqual(control.params, pool.nativeMessages[0].params);
+            const expected = expectedGpuMessages(pool, scenario.algorithm);
+            assert.deepEqual(control.params, expected.control);
             const notify = await miner.peer.waitForMessage(message =>
                 message.method === "mining.notify" && message.algo === scenario.algorithm,
                 config.timeoutMs, `${scenario.requested} delayed notify`);
-            assert.deepEqual(notify.params, pool.nativeMessages[1].params);
+            assert.deepEqual(notify.params, expected.notify);
         }, {
             poolFactory: timeout => new DelayedGpuOnlyPool(timeout)
         });
